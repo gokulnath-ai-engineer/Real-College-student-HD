@@ -1,6 +1,37 @@
 {
   "version": 2,
-  "groups": {},
+  "groups": {
+    "models": {
+      "name": "Models",
+      "order": 10
+    },
+    "share": {
+      "name": "Share",
+      "order": 20
+    }
+  },
   "bundles": {},
-  "assets": {}
+  "assets": {
+    "assets/models/campus-shuttle.glb": {
+      "path": "/manus-storage/game/sha256/68a5e19ea240c539250f9ff1438058d37731062be4db4c4f6ebd8bf8a4a7c87a.glb",
+      "sha256": "sha256:68a5e19ea240c539250f9ff1438058d37731062be4db4c4f6ebd8bf8a4a7c87a",
+      "size": 926056,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/share/favicon.png": {
+      "path": "/manus-storage/game/sha256/211748c5e51baa6e120c0700dd19ac37989640fec9a8e9386e5d21dfc24aa463.png",
+      "sha256": "sha256:211748c5e51baa6e120c0700dd19ac37989640fec9a8e9386e5d21dfc24aa463",
+      "size": 2631,
+      "assetType": "image",
+      "groupId": "share"
+    },
+    "assets/share/og.png": {
+      "path": "/manus-storage/game/sha256/12339d3fd3fb3bd206a8c1a8eafedaf3658910b97e013347fa40a7de5f8a4491.png",
+      "sha256": "sha256:12339d3fd3fb3bd206a8c1a8eafedaf3658910b97e013347fa40a7de5f8a4491",
+      "size": 5292658,
+      "assetType": "image",
+      "groupId": "share"
+    }
+  }
 }

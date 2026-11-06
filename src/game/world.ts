@@ -1,408 +1,254 @@
 import * as THREE from 'three'
-import type { Physics } from '../engine/physics'
-import { RAPIER } from '../engine/physics'
+import { RAPIER, type Physics } from '../engine/physics'
 
-/**
- * Procedural sky-islands level. Everything is built from primitives and a seeded RNG, so the
- * starter ships no model files and the layout is identical on every load.
- *
- * To make a different level, edit ISLANDS / LINKS: stepping stones are generated automatically
- * so every link stays jumpable with the tuning in config.ts.
- */
-export type Island = { x: number; z: number; top: number; r: number; cores: number; decor?: boolean }
-type Link = { a: number; b: number; kind: 'stones' | 'mover' }
-
-export const ISLANDS: Island[] = [
-  { x: 0, z: 0, top: 0, r: 7, cores: 2, decor: true },
-  { x: 15, z: 3, top: 1.5, r: 4, cores: 2, decor: true },
-  { x: 24, z: -8, top: 3.2, r: 3.5, cores: 2 },
-  { x: 14, z: -19, top: 4.8, r: 4.5, cores: 2, decor: true },
-  { x: 0, z: -27, top: 6.5, r: 5, cores: 2, decor: true },
-  { x: -15, z: -16, top: 4.5, r: 4, cores: 2, decor: true },
-  { x: -23, z: 1, top: 2.8, r: 3.5, cores: 2 },
-  { x: -11, z: 17, top: 1.2, r: 4.5, cores: 2, decor: true },
-  { x: 7, z: 17, top: 2.5, r: 3.5, cores: 2 },
-  // Summit: reached by the lift from island 4.
-  { x: 0, z: -12, top: 10.5, r: 3, cores: 3 },
-]
-
-const LINKS: Link[] = [
-  { a: 0, b: 1, kind: 'stones' },
-  { a: 1, b: 2, kind: 'stones' },
-  { a: 2, b: 3, kind: 'stones' },
-  { a: 3, b: 4, kind: 'stones' },
-  { a: 4, b: 5, kind: 'stones' },
-  { a: 5, b: 6, kind: 'stones' },
-  { a: 6, b: 7, kind: 'mover' },
-  { a: 7, b: 8, kind: 'stones' },
-  { a: 8, b: 0, kind: 'stones' },
-  { a: 4, b: 9, kind: 'mover' },
-]
-
-const STONE = 1.8
-const MAX_GAP = 2.3
-const MAX_RISE = 1.05
-
-export const PALETTE = {
-  skyTop: new THREE.Color('#2f6fd6'),
-  horizon: new THREE.Color('#ffd9b0'),
-  grass: new THREE.Color('#79cf6e'),
-  grassDark: new THREE.Color('#4fae5e'),
-  rock: new THREE.Color('#8b6b58'),
-  rockDark: new THREE.Color('#5d4639'),
-  stone: new THREE.Color('#e3cfa6'),
-  leaf: [new THREE.Color('#3f9a57'), new THREE.Color('#5bb85d'), new THREE.Color('#e0a44a')],
-  trunk: new THREE.Color('#7a4f35'),
-  crystal: new THREE.Color('#7ee8ff'),
-}
-
-/** Mulberry32: tiny deterministic RNG so the level never changes between loads. */
-export function rng(seed: number): () => number {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
-/**
- * Plan stepping stones between two islands so every hop fits the jump: the smallest count whose
- * edge-to-edge gap and per-hop rise are within MAX_GAP / MAX_RISE. Pure; unit tested.
- */
-export function planStones(a: Island, b: Island): { x: number; z: number; top: number }[] {
-  const dx = b.x - a.x
-  const dz = b.z - a.z
-  const d = Math.hypot(dx, dz)
-  const gap = d - a.r - b.r
-  const dy = b.top - a.top
-  let n = 0
-  while ((gap - n * STONE) / (n + 1) > MAX_GAP || Math.abs(dy) / (n + 1) > MAX_RISE) n += 1
-  const g = (gap - n * STONE) / (n + 1)
-  const out: { x: number; z: number; top: number }[] = []
-  for (let i = 1; i <= n; i += 1) {
-    const along = a.r + g * i + STONE * (i - 0.5)
-    out.push({ x: a.x + (dx / d) * along, z: a.z + (dz / d) * along, top: a.top + (dy * i) / (n + 1) })
-  }
-  return out
-}
-
-export type MovingPlatform = {
-  mesh: THREE.Mesh
-  body: RAPIER.RigidBody
-  from: THREE.Vector3
-  to: THREE.Vector3
-  period: number
-  phase: number
-  /** Movement applied during the last fixed step; the player adds it while standing on top. */
-  delta: THREE.Vector3
-  half: THREE.Vector3
-}
-
+export type MovingPlatform = { mesh: THREE.Mesh; body: RAPIER.RigidBody; from: THREE.Vector3; to: THREE.Vector3; period: number; phase: number; delta: THREE.Vector3; half: THREE.Vector3 }
 export type DroneRoute = { center: THREE.Vector3; radius: number; phase: number; dir: 1 | -1 }
+export const ISLANDS = [
+  { x: 0, z: 0, top: 0, r: 7, cores: 2 }, { x: 15, z: 3, top: 1.5, r: 4, cores: 2 }, { x: 24, z: -8, top: 3.2, r: 3.5, cores: 2 },
+  { x: 14, z: -19, top: 4.8, r: 4.5, cores: 2 }, { x: 0, z: -27, top: 6.5, r: 5, cores: 2 }, { x: -15, z: -16, top: 4.5, r: 4, cores: 2 },
+  { x: -23, z: 1, top: 2.8, r: 3.5, cores: 2 }, { x: -11, z: 17, top: 1.2, r: 4.5, cores: 2 }, { x: 7, z: 17, top: 2.5, r: 3.5, cores: 2 }, { x: 0, z: -12, top: 10.5, r: 3, cores: 3 },
+]
+export function rng(seed: number): () => number { let value = seed >>> 0; return () => { value = (value + 0x6d2b79f5) >>> 0; let t = value; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296 } }
+export function planStones(a: typeof ISLANDS[number], b: typeof ISLANDS[number]): { x: number; z: number; top: number }[] { const dx = b.x - a.x; const dz = b.z - a.z; const distance = Math.hypot(dx, dz); const gap = distance - a.r - b.r; const dy = b.top - a.top; const out: { x: number; z: number; top: number }[] = []; let n = 0; while ((gap - n * 1.8) / (n + 1) > 2.3 || Math.abs(dy) / (n + 1) >= 1.05) n += 1; const between = (gap - n * 1.8) / (n + 1); for (let i = 1; i <= n; i += 1) { const along = a.r + between * i + 1.8 * (i - 0.5); out.push({ x: a.x + (dx / distance) * along, z: a.z + (dz / distance) * along, top: a.top + (dy * i) / (n + 1) }) } return out }
+export type Location = { id: string; label: string; subtitle: string; position: THREE.Vector3; color: string; kind: 'campus' | 'city' | 'activity' }
+type Npc = { root: THREE.Group; route: THREE.Vector3[]; routeIndex: number; speed: number; role: 'Student' | 'Faculty'; phase: number }
+type Traffic = { root: THREE.Group; route: THREE.Vector3[]; t: number; speed: number; color: string }
+
+const COLORS = {
+  ink: '#081522', road: '#233340', roadLine: '#e8bd55', campus: '#4b9a82', lawn: '#174d4a', concrete: '#b9c8c1', teal: '#48d9c1', amber: '#ffc857', coral: '#f4866f', cream: '#f4efe2', blue: '#2f7fa0', purple: '#7667c8', red: '#d76561', hill: '#475169', rain: '#88c7ff', sun: '#ffd59d', overcast: '#aab9c4', night: '#101d36', white: '#ffffff', glass: '#6fbed1', leaf: '#2d8f66', trunk: '#76523a', navy: '#17233a', yellow: '#edc75c',
+}
+
+export const LOCATIONS: Location[] = [
+  { id: 'gate', label: 'Main Gate', subtitle: 'CMSCE Nagar · Eranapuram', position: new THREE.Vector3(0, 0, 22), color: COLORS.teal, kind: 'campus' },
+  { id: 'classrooms', label: 'Classroom Block', subtitle: 'Attend your next lecture', position: new THREE.Vector3(-16, 0, 4), color: COLORS.blue, kind: 'campus' },
+  { id: 'labs', label: 'Engineering Labs', subtitle: 'CSE · ECE · EEE labs', position: new THREE.Vector3(16, 0, 4), color: COLORS.purple, kind: 'campus' },
+  { id: 'library', label: 'Central Library', subtitle: 'Quiet study · project desk', position: new THREE.Vector3(-18, 0, -12), color: COLORS.amber, kind: 'campus' },
+  { id: 'canteen', label: 'Student Canteen', subtitle: 'Meals and campus chatter', position: new THREE.Vector3(17, 0, -12), color: COLORS.coral, kind: 'activity' },
+  { id: 'hostel', label: 'Hostel Quad', subtitle: 'Residential life', position: new THREE.Vector3(-3, 0, -25), color: COLORS.teal, kind: 'campus' },
+  { id: 'sports', label: 'Sports Ground', subtitle: 'Cricket · football · badminton', position: new THREE.Vector3(30, 0, -23), color: COLORS.leaf, kind: 'activity' },
+  { id: 'placement', label: 'Placement Cell', subtitle: 'Training and interview prep', position: new THREE.Vector3(0, 0, -8), color: COLORS.yellow, kind: 'activity' },
+  { id: 'busstand', label: 'Namakkal Bus Stand', subtitle: 'City transport hub', position: new THREE.Vector3(-2, 0, 47), color: COLORS.coral, kind: 'city' },
+  { id: 'shops', label: 'Eranapuram Shops', subtitle: 'Stationery · snacks · recharge', position: new THREE.Vector3(25, 0, 47), color: COLORS.amber, kind: 'city' },
+  { id: 'temple', label: 'Hill Temple View', subtitle: 'A respectful landmark vista', position: new THREE.Vector3(-28, 0, 49), color: COLORS.purple, kind: 'city' },
+]
 
 export class World {
   readonly scene = new THREE.Scene()
   readonly sun: THREE.DirectionalLight
-  readonly spawn = new THREE.Vector3(0, 1.2, 3)
-  readonly coreSpots: THREE.Vector3[] = []
-  readonly droneRoutes: DroneRoute[] = []
+  readonly spawn = new THREE.Vector3(0, 1.15, 20)
   readonly movers: MovingPlatform[] = []
-  private clouds: THREE.Object3D[] = []
+  readonly locations = LOCATIONS
+  private readonly npcs: Npc[] = []
+  private readonly traffic: Traffic[] = []
+  private readonly clouds: THREE.Object3D[] = []
+  private rain!: THREE.Points
+  private rainPositions!: Float32Array
+  private weather: 'clear' | 'monsoon' | 'overcast' = 'clear'
+  private readonly shuttle?: THREE.Object3D
 
-  constructor(private readonly physics: Physics, shadowMapSize: number) {
-    const random = rng(1337)
-    this.scene.background = PALETTE.horizon.clone()
-    this.scene.fog = new THREE.Fog(PALETTE.horizon, 45, 150)
-
-    this.scene.add(this.makeSky())
-    this.scene.add(new THREE.HemisphereLight('#cfe8ff', '#6b5242', 1.0))
-    this.sun = new THREE.DirectionalLight('#fff0d8', 2.1)
+  constructor(private readonly physics: Physics, shadowMapSize: number, shuttleModel?: THREE.Object3D) {
+    this.shuttle = shuttleModel
+    this.scene.background = new THREE.Color(COLORS.night)
+    this.scene.fog = new THREE.Fog(new THREE.Color(COLORS.night), 70, 170)
+    this.scene.add(new THREE.HemisphereLight('#b4d8e6', '#1a2738', 1.25))
+    this.sun = new THREE.DirectionalLight(COLORS.sun, 1.8)
     this.sun.castShadow = true
     this.sun.shadow.mapSize.set(shadowMapSize, shadowMapSize)
-    const cam = this.sun.shadow.camera
-    cam.left = cam.bottom = -26
-    cam.right = cam.top = 26
-    cam.near = 1
-    cam.far = 90
-    this.sun.shadow.bias = -0.0004
-    this.sun.shadow.normalBias = 0.03
+    this.sun.shadow.camera.left = -80; this.sun.shadow.camera.right = 80; this.sun.shadow.camera.top = 80; this.sun.shadow.camera.bottom = -80; this.sun.shadow.camera.near = 1; this.sun.shadow.camera.far = 170
+    this.sun.shadow.bias = -0.0002; this.sun.shadow.normalBias = 0.04
     this.scene.add(this.sun, this.sun.target)
-
-    ISLANDS.forEach((island, i) => this.addIsland(island, i, random))
-    for (const link of LINKS) {
-      const a = ISLANDS[link.a]
-      const b = ISLANDS[link.b]
-      if (link.kind === 'stones') this.addStones(a, b, random)
-      else this.addMover(a, b, link.a * 7 + link.b)
-    }
-    this.addClouds(random)
-    this.addDistantIslands(random)
-
-    // Patrol drones circle over the larger islands (never the spawn hub); the summit gets a tight guard.
-    for (const i of [1, 3, 5, 7]) {
-      const isl = ISLANDS[i]
-      this.droneRoutes.push({ center: new THREE.Vector3(isl.x, isl.top + 1.1, isl.z), radius: isl.r * 0.62, phase: random() * Math.PI * 2, dir: random() > 0.5 ? 1 : -1 })
-    }
-    const summit = ISLANDS[9]
-    this.droneRoutes.push({ center: new THREE.Vector3(summit.x, summit.top + 1.1, summit.z), radius: 1.9, phase: 0, dir: 1 })
+    this.addGround()
+    this.addRoads()
+    this.addCampus()
+    this.addCityEdge()
+    this.addNature()
+    this.addNpcs()
+    this.addTraffic()
+    this.addWeather()
   }
 
-  /** Per-frame ambience (clouds, shadow frustum follows the player). */
-  update(dt: number, focus: THREE.Vector3): void {
-    for (const c of this.clouds) {
-      c.position.x += dt * (c.userData.speed as number)
-      if (c.position.x > 120) c.position.x = -120
-    }
-    this.sun.position.set(focus.x + 18, focus.y + 34, focus.z + 12)
+  update(dt: number, focus: THREE.Vector3, clockMinutes: number): void {
+    const dayAngle = ((clockMinutes - 360) / 900) * Math.PI
+    const daylight = THREE.MathUtils.clamp(Math.sin(dayAngle) * 0.75 + 0.2, 0.08, 1)
+    this.sun.position.set(focus.x + 38 * Math.cos(dayAngle), focus.y + 46 * daylight, focus.z + 25)
     this.sun.target.position.copy(focus)
+    this.sun.intensity = this.weather === 'overcast' ? daylight * 1.05 : daylight * 1.8
+    for (const cloud of this.clouds) { cloud.position.x += dt * 0.35; if (cloud.position.x > 120) cloud.position.x = -120 }
+    this.stepNpcs(dt, clockMinutes)
+    this.stepTraffic(dt)
+    this.updateRain(dt)
   }
 
-  /** Advance moving platforms by one fixed step and record their movement. */
-  stepMovers(elapsed: number): void {
-    for (const m of this.movers) {
-      // Ease in-out ping-pong with a pause at each end so boarding is forgiving.
-      const t = ((elapsed + m.phase) % m.period) / m.period
-      const tri = t < 0.5 ? t * 2 : 2 - t * 2
-      const k = THREE.MathUtils.smootherstep(THREE.MathUtils.clamp((tri - 0.12) / 0.76, 0, 1), 0, 1)
-      const target = new THREE.Vector3().lerpVectors(m.from, m.to, k)
-      const cur = m.body.translation()
-      m.delta.set(target.x - cur.x, target.y - cur.y, target.z - cur.z)
-      m.body.setNextKinematicTranslation(target)
+  setWeather(weather: 'clear' | 'monsoon' | 'overcast'): void {
+    this.weather = weather
+    const bg = weather === 'monsoon' ? '#2b4666' : weather === 'overcast' ? '#617789' : '#101d36'
+    this.scene.background = new THREE.Color(bg)
+    this.scene.fog = new THREE.Fog(new THREE.Color(bg), weather === 'monsoon' ? 55 : 75, 170)
+    this.rain.visible = weather === 'monsoon'
+  }
+
+  stepMovers(_elapsed: number): void { /* Kept for the player contract; campus has no moving platforms. */ }
+
+  interactionAt(position: THREE.Vector3): Location | null {
+    let found: Location | null = null
+    let distance = 5.2
+    for (const location of this.locations) {
+      const d = position.distanceTo(location.position)
+      if (d < distance) { found = location; distance = d }
+    }
+    return found
+  }
+
+  nearestLocation(position: THREE.Vector3): Location | null {
+    let found: Location | null = null; let distance = Infinity
+    for (const location of this.locations) { const d = position.distanceToSquared(location.position); if (d < distance) { distance = d; found = location } }
+    return found
+  }
+
+  missionTarget(index: number): THREE.Vector3 {
+    const ids = ['classrooms', 'library', 'labs', 'placement', 'sports']
+    return (this.locations.find(location => location.id === ids[Math.min(index, 4)]) ?? this.locations[0]).position
+  }
+
+  vehicleAt(position: THREE.Vector3): 'Bike' | 'Car' | 'College Bus' | null {
+    const vehicles = [
+      { kind: 'Bike' as const, pos: new THREE.Vector3(8, 0, 20), radius: 3 },
+      { kind: 'Car' as const, pos: new THREE.Vector3(-8, 0, 20), radius: 3 },
+      { kind: 'College Bus' as const, pos: new THREE.Vector3(3, 0, 47), radius: 4 },
+    ]
+    const match = vehicles.find(vehicle => position.distanceTo(vehicle.pos) < vehicle.radius)
+    return match?.kind ?? null
+  }
+
+  private addGround(): void {
+    const ground = new THREE.Mesh(new THREE.BoxGeometry(160, 0.3, 140), mat(COLORS.lawn))
+    ground.position.y = -0.18; ground.receiveShadow = true; this.scene.add(ground)
+    this.physics.addStaticBox(new THREE.Vector3(0, -0.18, 0), new THREE.Vector3(160, 0.3, 140))
+  }
+
+  private addRoads(): void {
+    const roads = [
+      { x: 0, z: 36, w: 7, h: 88 }, { x: 0, z: -2, w: 7, h: 70 }, { x: 0, z: -11, w: 64, h: 7 }, { x: 13, z: 25, w: 34, h: 6 }, { x: -14, z: 25, w: 28, h: 6 },
+    ]
+    for (const road of roads) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(road.w, 0.04, road.h), mat(COLORS.road)); mesh.position.set(road.x, 0.02, road.z); mesh.receiveShadow = true; this.scene.add(mesh)
+      const lineCount = Math.floor(Math.max(road.w, road.h) / 8)
+      for (let i = -lineCount; i <= lineCount; i += 1) {
+        const horizontal = road.w > road.h
+        const line = new THREE.Mesh(new THREE.BoxGeometry(horizontal ? 2.8 : 0.12, 0.045, horizontal ? 0.12 : 2.8), mat(COLORS.roadLine))
+        line.position.set(horizontal ? road.x + i * 6 : road.x, 0.06, horizontal ? road.z : road.z + i * 6); this.scene.add(line)
+      }
     }
   }
 
-  private makeSky(): THREE.Mesh {
-    const mat = new THREE.ShaderMaterial({
-      side: THREE.BackSide,
-      depthWrite: false,
-      fog: false,
-      uniforms: {
-        top: { value: PALETTE.skyTop },
-        horizon: { value: PALETTE.horizon },
-        sunDir: { value: new THREE.Vector3(18, 34, 12).normalize() },
-      },
-      vertexShader: /* glsl */ `
-        varying vec3 vDir;
-        void main() {
-          vDir = normalize(position);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }`,
-      fragmentShader: /* glsl */ `
-        uniform vec3 top; uniform vec3 horizon; uniform vec3 sunDir;
-        varying vec3 vDir;
-        void main() {
-          float h = clamp(vDir.y, -1.0, 1.0);
-          vec3 col = mix(horizon, top, pow(max(h, 0.0), 0.55));
-          col = mix(col, horizon * 0.92, smoothstep(0.0, -0.4, h));
-          float s = max(dot(normalize(vDir), sunDir), 0.0);
-          col += vec3(1.0, 0.85, 0.6) * (pow(s, 600.0) * 3.0 + pow(s, 12.0) * 0.25);
-          gl_FragColor = vec4(col, 1.0);
-          #include <colorspace_fragment>
-        }`,
-    })
-    const sky = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 16), mat)
-    sky.renderOrder = -1
-    return sky
+  private addCampus(): void {
+    this.addArch(new THREE.Vector3(0, 0, 22))
+    this.addBuilding('CLASSROOMS', new THREE.Vector3(-16, 0, 4), new THREE.Vector3(15, 5.5, 11), COLORS.blue)
+    this.addBuilding('ENGINEERING LABS', new THREE.Vector3(16, 0, 4), new THREE.Vector3(15, 5.5, 11), COLORS.purple)
+    this.addBuilding('CENTRAL LIBRARY', new THREE.Vector3(-18, 0, -12), new THREE.Vector3(15, 5.5, 10), COLORS.amber)
+    this.addBuilding('STUDENT CANTEEN', new THREE.Vector3(17, 0, -12), new THREE.Vector3(14, 4.2, 9), COLORS.coral)
+    this.addBuilding('HOSTEL QUAD', new THREE.Vector3(-3, 0, -25), new THREE.Vector3(23, 5.8, 9), COLORS.teal)
+    this.addBuilding('PLACEMENT CELL', new THREE.Vector3(0, 0, -8), new THREE.Vector3(9, 3.8, 6), COLORS.yellow)
+    this.addCourt(new THREE.Vector3(30, 0, -23))
+    this.addSign('CMS COLLEGE OF ENGINEERING', new THREE.Vector3(0, 3.8, 22), COLORS.teal, 0.8)
+    this.addSign('CMS NAGAR · ERANAPURAM', new THREE.Vector3(0, 2.1, 26), COLORS.cream, 0.45)
   }
 
-  private addIsland(isl: Island, index: number, random: () => number): void {
-    const group = new THREE.Group()
-    group.position.set(isl.x, isl.top, isl.z)
+  private addCityEdge(): void {
+    this.addBusStand(new THREE.Vector3(-2, 0, 47))
+    this.addBuilding('ERANAPURAM SHOPS', new THREE.Vector3(25, 0, 47), new THREE.Vector3(28, 4.4, 10), COLORS.amber)
+    this.addHillTemple(new THREE.Vector3(-28, 0, 49))
+    for (let x = -34; x <= 34; x += 8) this.addLamp(new THREE.Vector3(x, 0, 40))
+  }
 
-    const topGeo = new THREE.CylinderGeometry(isl.r, isl.r * 0.94, 0.8, 22, 1)
-    const top = new THREE.Mesh(topGeo, flat(PALETTE.grass))
-    top.position.y = -0.4
-    top.receiveShadow = true
-    top.castShadow = true
-    group.add(top)
+  private addBuilding(label: string, pos: THREE.Vector3, size: THREE.Vector3, accent: string): void {
+    const base = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), mat(COLORS.concrete)); base.position.set(pos.x, size.y / 2, pos.z); base.castShadow = true; base.receiveShadow = true; this.scene.add(base)
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(size.x + 0.5, 0.38, size.z + 0.5), mat(accent)); roof.position.set(pos.x, size.y + 0.19, pos.z); roof.castShadow = true; this.scene.add(roof)
+    const door = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 0.06), mat(COLORS.ink)); door.position.set(pos.x, 1.2, pos.z - size.z / 2 - 0.04); this.scene.add(door)
+    for (let x = -size.x / 2 + 2.2; x < size.x / 2; x += 3.2) for (const y of [1.7, 3.6]) {
+      const window = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.85, 0.08), mat(COLORS.glass)); window.position.set(pos.x + x, y, pos.z - size.z / 2 - 0.05); window.castShadow = true; this.scene.add(window)
+    }
+    this.physics.addStaticBox(new THREE.Vector3(pos.x, size.y / 2, pos.z), size)
+    this.addSign(label, new THREE.Vector3(pos.x, size.y + 0.75, pos.z - size.z / 2 - 0.15), accent, 0.5)
+  }
 
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(isl.r * 0.94, isl.r * 0.86, 0.6, 22, 1), flat(PALETTE.grassDark))
-    rim.position.y = -1.1
-    group.add(rim)
+  private addArch(pos: THREE.Vector3): void {
+    const group = new THREE.Group(); group.position.copy(pos)
+    const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 4.7, 1.1), mat(COLORS.teal)); const other = pillar.clone(); other.position.x = 10
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(11, 0.8, 1.2), mat(COLORS.teal)); beam.position.set(5, 4.2, 0)
+    group.add(pillar, other, beam); this.scene.add(group); this.physics.addStaticBox(new THREE.Vector3(pos.x, 2.35, pos.z), new THREE.Vector3(1.1, 4.7, 1.1)); this.physics.addStaticBox(new THREE.Vector3(pos.x + 10, 2.35, pos.z), new THREE.Vector3(1.1, 4.7, 1.1))
+  }
 
-    const under = new THREE.ConeGeometry(isl.r * 0.88, isl.r * 1.7 + 1.5, 14, 4)
-    jitter(under, random, 0.28 * isl.r * 0.35)
-    const rock = new THREE.Mesh(under, flat(PALETTE.rock))
-    rock.rotation.x = Math.PI
-    rock.position.y = -1.4 - (isl.r * 1.7 + 1.5) / 2
-    rock.castShadow = true
-    group.add(rock)
+  private addCourt(pos: THREE.Vector3): void {
+    const field = new THREE.Mesh(new THREE.BoxGeometry(28, 0.08, 18), mat('#3d936f')); field.position.copy(pos); this.scene.add(field)
+    const stripe = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(24, 0.02, 14)), new THREE.LineBasicMaterial({ color: COLORS.cream })); stripe.position.set(pos.x, 0.06, pos.z); this.scene.add(stripe)
+    for (const offset of [-6, 0, 6]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.2, 8), mat(COLORS.cream)); post.position.set(pos.x + offset, 1.1, pos.z); this.scene.add(post) }
+    this.addSign('SPORTS GROUND', new THREE.Vector3(pos.x, 2.4, pos.z - 9.2), COLORS.leaf, 0.45)
+  }
+
+  private addBusStand(pos: THREE.Vector3): void {
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(22, 0.3, 5), mat(COLORS.coral)); canopy.position.set(pos.x, 4.4, pos.z); this.scene.add(canopy)
+    for (const x of [-9, 9]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 4.4, 8), mat(COLORS.cream)); post.position.set(pos.x + x, 2.2, pos.z); this.scene.add(post) }
+    this.addSign('NAMAKKAL BUS STAND', new THREE.Vector3(pos.x, 5.1, pos.z), COLORS.coral, 0.5)
+    if (this.shuttle) { const bus = this.shuttle.clone(true); bus.scale.setScalar(1.8); bus.position.set(pos.x + 4, 1.2, pos.z + 2.8); bus.rotation.y = Math.PI; bus.traverse(obj => { obj.castShadow = true }); this.scene.add(bus) } else this.addVehicleMesh('College Bus', new THREE.Vector3(pos.x + 4, 1.1, pos.z + 2.8), COLORS.teal, 1.8)
+    this.addVehicleMesh('Bike', new THREE.Vector3(8, 0.55, 20), COLORS.coral, 0.65)
+    this.addVehicleMesh('Car', new THREE.Vector3(-8, 0.7, 20), COLORS.blue, 1.0)
+  }
+
+  private addVehicleMesh(kind: string, pos: THREE.Vector3, color: string, scale: number): void {
+    const group = new THREE.Group(); group.position.copy(pos); group.scale.setScalar(scale)
+    const body = new THREE.Mesh(new THREE.BoxGeometry(kind === 'Bike' ? 1.2 : 2.8, kind === 'Bus' || kind === 'College Bus' ? 1.8 : 0.8, kind === 'Bike' ? 2.1 : 4.8), mat(color)); body.castShadow = true; group.add(body)
+    if (kind === 'Bike') { for (const z of [-0.72, 0.72]) { const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.08, 8, 14), mat(COLORS.ink)); wheel.rotation.x = Math.PI / 2; wheel.position.set(0, -0.32, z); group.add(wheel) } }
+    else { for (const x of [-1.05, 1.05]) for (const z of [-1.45, 1.45]) { const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.22, 12), mat(COLORS.ink)); wheel.rotation.z = Math.PI / 2; wheel.position.set(x, -0.42, z); group.add(wheel) } }
     this.scene.add(group)
-
-    this.physics.addStaticCylinder(new THREE.Vector3(isl.x, isl.top - 0.4, isl.z), isl.r, 0.8)
-
-    // Core spots: spread around the island, away from the centre where the player lands.
-    for (let c = 0; c < isl.cores; c += 1) {
-      const angle = (c / isl.cores) * Math.PI * 2 + index * 1.3
-      const dist = isl.cores === 1 ? 0 : isl.r * 0.55
-      this.coreSpots.push(new THREE.Vector3(isl.x + Math.cos(angle) * dist, isl.top + 1.1, isl.z + Math.sin(angle) * dist))
-    }
-
-    if (isl.decor) {
-      const trees = Math.round(isl.r * 0.6)
-      for (let t = 0; t < trees; t += 1) {
-        const angle = random() * Math.PI * 2
-        const dist = isl.r * (0.68 + random() * 0.2)
-        this.addTree(isl.x + Math.cos(angle) * dist, isl.top, isl.z + Math.sin(angle) * dist, 0.6 + random() * 0.4, random)
-      }
-    }
-    for (let k = 0; k < 3; k += 1) {
-      const angle = random() * Math.PI * 2
-      const dist = isl.r * (0.8 + random() * 0.12)
-      const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.22 + random() * 0.18, 0), glow(PALETTE.crystal, 2.4))
-      crystal.scale.y = 2.2
-      crystal.position.set(isl.x + Math.cos(angle) * dist, isl.top + 0.3, isl.z + Math.sin(angle) * dist)
-      crystal.rotation.set(random() * 0.4, random() * 3, random() * 0.4)
-      this.scene.add(crystal)
-    }
   }
 
-  private addTree(x: number, y: number, z: number, scale: number, random: () => number): void {
-    const tree = new THREE.Group()
-    tree.position.set(x, y, z)
-    tree.scale.setScalar(scale)
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 1.1, 6), flat(PALETTE.trunk))
-    trunk.position.y = 0.55
-    trunk.castShadow = true
-    tree.add(trunk)
-    const leafColor = PALETTE.leaf[Math.floor(random() * PALETTE.leaf.length)]
-    for (let i = 0; i < 2; i += 1) {
-      const leaves = new THREE.Mesh(new THREE.IcosahedronGeometry(0.75 - i * 0.2, 0), flat(leafColor))
-      leaves.position.set((random() - 0.5) * 0.2, 1.35 + i * 0.6, (random() - 0.5) * 0.2)
-      leaves.rotation.set(random(), random(), random())
-      leaves.castShadow = true
-      tree.add(leaves)
-    }
-    this.scene.add(tree)
-    this.physics.addStaticCylinder(new THREE.Vector3(x, y + 1.2 * scale, z), 0.28 * scale, 2.4 * scale)
+  private addHillTemple(pos: THREE.Vector3): void {
+    const hill = new THREE.Mesh(new THREE.ConeGeometry(11, 16, 7), mat(COLORS.hill)); hill.position.set(pos.x, 7, pos.z); hill.castShadow = true; this.scene.add(hill)
+    const shrine = new THREE.Mesh(new THREE.ConeGeometry(1.8, 4.2, 4), mat(COLORS.coral)); shrine.position.set(pos.x, 16.5, pos.z); shrine.castShadow = true; this.scene.add(shrine)
+    this.addSign('HILL TEMPLE VIEW', new THREE.Vector3(pos.x, 1.8, pos.z - 8), COLORS.purple, 0.42)
   }
 
-  private addStones(a: Island, b: Island, random: () => number): void {
-    const stones = planStones(a, b)
-    stones.forEach((s, i) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(STONE, 0.55, STONE), flat(PALETTE.stone))
-      const rot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), random() * Math.PI)
-      mesh.position.set(s.x, s.top - 0.275, s.z)
-      mesh.quaternion.copy(rot)
-      mesh.castShadow = true
-      mesh.receiveShadow = true
-      const underside = new THREE.Mesh(new THREE.ConeGeometry(STONE * 0.62, 1.4, 5), flat(PALETTE.rockDark))
-      underside.rotation.x = Math.PI
-      underside.position.y = -0.95
-      mesh.add(underside)
-      this.scene.add(mesh)
-      this.physics.addStaticBox(mesh.position, new THREE.Vector3(STONE, 0.55, STONE), rot)
-      // Every other stone carries a core to pull the player along the route.
-      if (i % 2 === 1) this.coreSpots.push(new THREE.Vector3(s.x, s.top + 1.1, s.z))
-    })
+  private addNature(): void {
+    const random = seeded(88)
+    for (let i = 0; i < 58; i += 1) { const x = -43 + random() * 86; const z = -34 + random() * 74; if (Math.abs(x) < 24 && Math.abs(z) < 17) continue; this.addTree(new THREE.Vector3(x, 0, z), 0.7 + random() * 0.8) }
+    for (let i = 0; i < 18; i += 1) { const cloud = new THREE.Group(); for (let p = 0; p < 3; p += 1) { const puff = new THREE.Mesh(new THREE.SphereGeometry(1.6 + random() * 1.8, 12, 8), new THREE.MeshBasicMaterial({ color: '#d5e5ec', transparent: true, opacity: 0.12 })); puff.position.set(p * 2 - 2, random(), random() * 1.2); puff.scale.y = 0.45; cloud.add(puff) } cloud.position.set(-90 + random() * 180, 20 + random() * 20, -60 + random() * 120); cloud.userData.speed = 0.2 + random() * 0.4; this.clouds.push(cloud); this.scene.add(cloud) }
   }
 
-  private addMover(a: Island, b: Island, seed: number): void {
-    const dir = new THREE.Vector3(b.x - a.x, 0, b.z - a.z).normalize()
-    const half = new THREE.Vector3(1.3, 0.25, 1.3)
-    const from = new THREE.Vector3(a.x, a.top - half.y, a.z).addScaledVector(dir, a.r + half.x + 0.25)
-    const to = new THREE.Vector3(b.x, b.top - half.y, b.z).addScaledVector(dir, -(b.r + half.x + 0.25))
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(half.x * 2, half.y * 2, half.z * 2), flat(new THREE.Color('#f2b84b')))
-    mesh.castShadow = true
-    mesh.receiveShadow = true
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(half.x * 2 + 0.02, 0.1, 0.35), glow(new THREE.Color('#ffefb0'), 3))
-    stripe.position.y = half.y - 0.02
-    mesh.add(stripe)
-    mesh.position.copy(from)
-    this.scene.add(mesh)
-    const body = this.physics.addKinematic(mesh, RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z).setFriction(1))
-    const period = Math.max(6, from.distanceTo(to) * 0.9)
-    this.movers.push({ mesh, body, from, to, period, phase: (seed % 5) * 0.7, delta: new THREE.Vector3(), half })
+  private addTree(pos: THREE.Vector3, scale: number): void {
+    const group = new THREE.Group(); group.position.copy(pos); group.scale.setScalar(scale)
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 1.6, 8), mat(COLORS.trunk)); trunk.position.y = 0.8; trunk.castShadow = true
+    const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(1.1, 1), mat(COLORS.leaf)); crown.position.y = 2; crown.castShadow = true
+    group.add(trunk, crown); this.scene.add(group)
   }
 
-  private addClouds(random: () => number): void {
-    // Unlit with baked top-to-bottom shading: soft and bright without tripping the bloom threshold.
-    const mat = new THREE.MeshBasicMaterial({ vertexColors: true })
-    for (let i = 0; i < 26; i += 1) {
-      const cloud = new THREE.Group()
-      const puffs = 3 + Math.floor(random() * 4)
-      for (let p = 0; p < puffs; p += 1) {
-        const puff = new THREE.Mesh(shadeCloud(new THREE.IcosahedronGeometry(1.4 + random() * 1.6, 1)), mat)
-        puff.position.set(p * 1.6 - puffs * 0.8, random() * 0.8, (random() - 0.5) * 1.6)
-        puff.scale.y = 0.62
-        cloud.add(puff)
-      }
-      const low = random() < 0.6
-      cloud.position.set((random() - 0.5) * 240, low ? -14 - random() * 12 : 18 + random() * 16, (random() - 0.5) * 200)
-      cloud.scale.setScalar(low ? 2.4 + random() * 2 : 1.2 + random())
-      cloud.userData.speed = 0.6 + random() * 0.8
-      this.clouds.push(cloud)
-      this.scene.add(cloud)
-    }
+  private addLamp(pos: THREE.Vector3): void { const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 3.5, 8), mat(COLORS.ink)); pole.position.set(pos.x, 1.75, pos.z); this.scene.add(pole); const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 8), new THREE.MeshStandardMaterial({ color: COLORS.amber, emissive: COLORS.amber, emissiveIntensity: 1.3 })); lamp.position.set(pos.x, 3.5, pos.z); this.scene.add(lamp) }
+
+  private addSign(text: string, pos: THREE.Vector3, color: string, scale: number): void { const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 128; const ctx = canvas.getContext('2d')!; ctx.fillStyle = COLORS.ink; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.strokeStyle = color; ctx.lineWidth = 8; ctx.strokeRect(5, 5, canvas.width - 10, canvas.height - 10); ctx.fillStyle = COLORS.cream; ctx.font = '700 30px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, canvas.width / 2, canvas.height / 2); const texture = new THREE.CanvasTexture(canvas); const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true })); sprite.position.copy(pos); sprite.scale.set(6 * scale, 1.5 * scale, 1); this.scene.add(sprite) }
+
+  private addNpcs(): void {
+    const studentRoutes = [[new THREE.Vector3(-10, 0, 18), new THREE.Vector3(-16, 0, 4), new THREE.Vector3(-18, 0, -12)], [new THREE.Vector3(10, 0, 18), new THREE.Vector3(16, 0, 4), new THREE.Vector3(17, 0, -12)], [new THREE.Vector3(-2, 0, 20), new THREE.Vector3(-3, 0, -25), new THREE.Vector3(0, 0, -8)], [new THREE.Vector3(27, 0, -20), new THREE.Vector3(17, 0, -12), new THREE.Vector3(16, 0, 4)]]
+    studentRoutes.forEach((route, i) => this.addNpc('Student', route, i * 0.7))
+    this.addNpc('Faculty', [new THREE.Vector3(0, 0, -8), new THREE.Vector3(-16, 0, 4), new THREE.Vector3(16, 0, 4)], 2.4)
   }
 
-  private addDistantIslands(random: () => number): void {
-    for (let i = 0; i < 9; i += 1) {
-      const angle = (i / 9) * Math.PI * 2 + random() * 0.4
-      const dist = 75 + random() * 35
-      const r = 5 + random() * 7
-      const g = new THREE.Group()
-      const top = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.9, 1.2, 12), flat(PALETTE.grassDark))
-      const under = new THREE.ConeGeometry(r * 0.85, r * 2.2, 9, 2)
-      jitter(under, random, r * 0.12)
-      const rock = new THREE.Mesh(under, flat(PALETTE.rockDark))
-      rock.rotation.x = Math.PI
-      rock.position.y = -r * 1.1 - 0.6
-      g.add(top, rock)
-      g.position.set(Math.cos(angle) * dist, -6 + random() * 22, Math.sin(angle) * dist)
-      this.scene.add(g)
-    }
+  private addNpc(role: Npc['role'], route: THREE.Vector3[], phase: number): void {
+    const root = new THREE.Group(); const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.42, 5, 10), mat(role === 'Faculty' ? COLORS.amber : COLORS.teal)); body.position.y = 0.75; body.castShadow = true; const head = new THREE.Mesh(new THREE.SphereGeometry(0.25, 12, 8), mat('#b97754')); head.position.y = 1.42; head.castShadow = true; root.add(body, head); root.position.copy(route[0]); this.scene.add(root); this.npcs.push({ root, route, routeIndex: 0, speed: role === 'Faculty' ? 1.1 : 1.5, role, phase })
   }
+
+  private stepNpcs(dt: number, clockMinutes: number): void { for (const npc of this.npcs) { const active = (Math.floor(clockMinutes / 60) + Math.floor(npc.phase)) % 5 !== 3; const target = active ? npc.route[npc.routeIndex] : npc.route[(npc.routeIndex + 1) % npc.route.length]; const delta = target.clone().sub(npc.root.position); delta.y = 0; if (delta.length() < 0.5) npc.routeIndex = (npc.routeIndex + 1) % npc.route.length; else { delta.normalize(); npc.root.position.addScaledVector(delta, npc.speed * dt); npc.root.rotation.y = Math.atan2(delta.x, delta.z) } } }
+
+  private addTraffic(): void {
+    const routes = [[new THREE.Vector3(-30, 0.35, 36), new THREE.Vector3(30, 0.35, 36)], [new THREE.Vector3(30, 0.35, 42), new THREE.Vector3(-30, 0.35, 42)], [new THREE.Vector3(-26, 0.35, -11), new THREE.Vector3(26, 0.35, -11)]]
+    routes.forEach((route, i) => { const root = new THREE.Group(); const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 2.2), mat([COLORS.coral, COLORS.blue, COLORS.yellow][i])); body.castShadow = true; root.add(body); root.position.copy(route[0]); this.scene.add(root); this.traffic.push({ root, route, t: i * 0.27, speed: 0.035 + i * 0.008, color: '' }) })
+  }
+
+  private stepTraffic(dt: number): void { for (const car of this.traffic) { car.t = (car.t + dt * car.speed) % 1; const a = car.route[0]; const b = car.route[1]; car.root.position.lerpVectors(a, b, car.t); car.root.lookAt(b.x, car.root.position.y, b.z) } }
+
+  private addWeather(): void { const count = 520; this.rainPositions = new Float32Array(count * 3); for (let i = 0; i < count; i += 1) { this.rainPositions[i * 3] = -55 + Math.random() * 110; this.rainPositions[i * 3 + 1] = Math.random() * 35; this.rainPositions[i * 3 + 2] = -35 + Math.random() * 100 } const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(this.rainPositions, 3)); this.rain = new THREE.Points(geometry, new THREE.PointsMaterial({ color: COLORS.rain, size: 0.08, transparent: true, opacity: 0.7 })); this.rain.visible = false; this.scene.add(this.rain) }
+
+  private updateRain(dt: number): void { if (!this.rain.visible) return; for (let i = 0; i < this.rainPositions.length; i += 3) { this.rainPositions[i + 1] -= dt * 16; if (this.rainPositions[i + 1] < 0) this.rainPositions[i + 1] = 28 + Math.random() * 8 } this.rain.geometry.attributes.position.needsUpdate = true }
 }
 
-const materialCache = new Map<string, THREE.Material>()
-function flat(color: THREE.Color): THREE.MeshStandardMaterial {
-  const key = `flat:${color.getHexString()}`
-  let m = materialCache.get(key) as THREE.MeshStandardMaterial | undefined
-  if (!m) {
-    m = new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.92, metalness: 0 })
-    materialCache.set(key, m)
-  }
-  return m
-}
-
-export function glow(color: THREE.Color, intensity: number): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: intensity, flatShading: true, roughness: 0.3 })
-}
-
-function shadeCloud(geo: THREE.BufferGeometry): THREE.BufferGeometry {
-  const pos = geo.attributes.position
-  geo.computeBoundingBox()
-  const { min, max } = geo.boundingBox!
-  const colors = new Float32Array(pos.count * 3)
-  const top = new THREE.Color('#ffffff')
-  const bottom = new THREE.Color('#c9cfe6')
-  const c = new THREE.Color()
-  for (let i = 0; i < pos.count; i += 1) {
-    c.lerpColors(bottom, top, (pos.getY(i) - min.y) / (max.y - min.y))
-    colors.set([c.r, c.g, c.b], i * 3)
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-  return geo
-}
-
-/** Displace vertices so primitives read as hand-carved rock, keeping shared seams closed. */
-function jitter(geo: THREE.BufferGeometry, random: () => number, amount: number): void {
-  const pos = geo.attributes.position as THREE.BufferAttribute
-  const offsets = new Map<string, THREE.Vector3>()
-  const v = new THREE.Vector3()
-  for (let i = 0; i < pos.count; i += 1) {
-    v.fromBufferAttribute(pos, i)
-    const key = `${v.x.toFixed(3)},${v.y.toFixed(3)},${v.z.toFixed(3)}`
-    let o = offsets.get(key)
-    if (!o) {
-      o = new THREE.Vector3((random() - 0.5) * amount, (random() - 0.5) * amount, (random() - 0.5) * amount)
-      offsets.set(key, o)
-    }
-    pos.setXYZ(i, v.x + o.x, v.y + o.y, v.z + o.z)
-  }
-  geo.computeVertexNormals()
-}
+function mat(color: string): THREE.MeshStandardMaterial { return new THREE.MeshStandardMaterial({ color, roughness: 0.78, metalness: 0.04 }) }
+function seeded(seed: number): () => number { let value = seed >>> 0; return () => { value = (value * 1664525 + 1013904223) >>> 0; return value / 0xffffffff } }

@@ -1,13 +1,10 @@
 import type { Audio } from '../engine/audio'
 import type { I18n } from '../engine/i18n'
 import type { Input } from '../engine/input'
-import { insertScore, type Locale, type Quality, type SaveData, type SaveStore } from '../engine/save'
-import { CONFIG } from '../game/config'
-import type { Compass, Hint } from '../game/game'
-import { formatClock, stars, type RunState } from '../game/rules'
+import type { SaveData } from '../engine/save'
+import type { Compass, Hint, RunState } from '../game/game'
 
 export type Screen = 'boot' | 'title' | 'hud' | 'pause' | 'settings' | 'leaderboard' | 'results'
-
 export type UiActions = {
   play(): void
   resume(): void
@@ -16,560 +13,110 @@ export type UiActions = {
   settings(patch: Partial<SaveData>): void
 }
 
-const ICON = {
-  core: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 21 12 12 23 3 12Z" fill="currentColor"/><path d="M12 1 21 12H3Z" fill="#fff" opacity=".35"/></svg>',
-  cell: '<svg viewBox="0 0 20 30" aria-hidden="true"><rect x="6" y="0" width="8" height="4" rx="1.5" fill="currentColor"/><rect x="1.5" y="4" width="17" height="25" rx="4" fill="none" stroke="currentColor" stroke-width="3"/><rect class="fill" x="5" y="8" width="10" height="17" rx="2" fill="currentColor"/></svg>',
-  star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 3 6.6 7.2.8-5.4 4.9 1.5 7.1L12 17.8 5.7 21.4l1.5-7.1L1.8 9.4 9 8.6Z" fill="currentColor"/></svg>',
-  arrow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 20 20 12 15 4 20Z" fill="currentColor"/></svg>',
-  pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="5" height="16" rx="1.5" fill="currentColor"/><rect x="14" y="4" width="5" height="16" rx="1.5" fill="currentColor"/></svg>',
-}
-
-/** Glyphs for control hints, per input method. */
-const GLYPH = {
-  keyboard: { keys: '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>', jump: '<kbd class="wide">Space</kbd>', dash: '<kbd>F</kbd>', select: '<kbd>Enter</kbd>', back: '<kbd>Esc</kbd>' },
-  gamepad: { keys: '<kbd class="round">L</kbd>', stickR: '<kbd class="round">R</kbd>', jump: '<kbd class="round a">A</kbd>', dash: '<kbd class="round x">X</kbd>', select: '<kbd class="round a">A</kbd>', back: '<kbd class="round b">B</kbd>' },
-}
-
-/**
- * DOM game UI: title, HUD, pause, settings, results and leaderboard as HTML/CSS layered over the
- * canvas. Every screen is keyboard-, gamepad- and touch-navigable; text comes from i18n keys and
- * re-renders on language change.
- */
 export class Ui {
   screen: Screen = 'boot'
   private readonly root: HTMLElement
-  private readonly stack: Screen[] = []
-  private hudCache = new Map<string, string>()
-  private hintKey: Hint | null = null
-  private navRepeat = 0
+  private lastStatus = 'Walk to a route marker and press E to interact.'
   private lastRun?: RunState
-  private savedRank = -1
-  private stormShown = false
-  private lastMethod = ''
+  private mapOpen = false
+  private phoneOpen = false
+  private inventoryOpen = false
+  private hintText = ''
 
-  constructor(
-    private readonly i18n: I18n,
-    private readonly save: SaveStore,
-    private readonly audio: Audio,
-    private readonly input: Input,
-    private readonly actions: UiActions,
-  ) {
+  constructor(_i18n: I18n, private readonly save: { data: SaveData }, private readonly audio: Audio, private readonly input: Input, private readonly actions: UiActions) {
     this.root = document.getElementById('ui')!
     this.root.innerHTML = this.template()
     this.root.addEventListener('click', e => this.onClick(e))
     this.root.addEventListener('input', e => this.onInput(e))
-    this.root.addEventListener('focusin', e => {
-      if ((e.target as HTMLElement).matches('.btn, .seg button, .toggle')) this.audio.play('ui')
+    window.addEventListener('keydown', e => {
+      if ((e.target as HTMLElement | null)?.matches?.('input, textarea')) return
+      if (e.code === 'Escape' && this.screen === 'settings') { e.preventDefault(); e.stopImmediatePropagation(); this.input.consume('pause'); this.show('pause'); return }
+      if (e.code === 'KeyM') this.togglePanel('map')
+      if (e.code === 'KeyI') this.togglePanel('inventory')
+      if (e.code === 'KeyP') this.togglePanel('phone')
     })
-    window.addEventListener('keydown', e => this.onKey(e))
-    i18n.onChange(() => this.translate())
-    this.translate()
     this.refreshSettings()
   }
 
-  // ─── screens ────────────────────────────────────────────────────────────
-
-  show(screen: Screen): void {
-    this.stack.length = 0
-    this.setScreen(screen)
+  show(screen: Screen): void { this.screen = screen; this.root.dataset.screen = screen; for (const element of this.root.querySelectorAll<HTMLElement>('[data-screen]')) element.classList.toggle('is-active', element.dataset.screen === screen); if (screen === 'title') this.renderTitle(); if (screen === 'settings') this.refreshSettings() }
+  push(screen: Screen): void { this.show(screen) }
+  back(): void { this.show(this.lastRun ? 'hud' : 'title') }
+  setBootProgress(progress: number): void { const bar = this.root.querySelector<HTMLElement>('.boot-progress i'); if (bar) bar.style.transform = `scaleX(${Math.max(0.04, Math.min(1, progress))})` }
+  frame(_dt: number): void {
+    const state = this as unknown as { input?: { method?: string; move?: { y: number }; consume?: (action: string) => boolean }; moveFocus?: () => void }
+    if (state.input?.method === 'gamepad' && state.input.move && state.input.move.y < -0.5) state.moveFocus?.()
+    if (state.input?.method === 'gamepad' && state.input.consume?.('confirm')) (document.activeElement as HTMLElement | null)?.click?.()
   }
-
-  /** Open an overlay screen (settings, leaderboard) that returns to the current one on Back. */
-  push(screen: Screen): void {
-    this.stack.push(this.screen)
-    this.setScreen(screen)
-  }
-
-  back(): void {
-    const prev = this.stack.pop()
-    if (prev) this.setScreen(prev)
-    else if (this.screen === 'pause') this.actions.resume()
-  }
-
-  private setScreen(screen: Screen): void {
-    this.screen = screen
-    for (const el of this.root.querySelectorAll<HTMLElement>('[data-screen]')) {
-      const active = el.dataset.screen === screen || (el.dataset.screen === 'hud' && (screen === 'pause' || screen === 'results' || (screen === 'settings' && this.stack.includes('pause'))))
-      el.classList.toggle('is-active', active)
-      el.setAttribute('aria-hidden', String(!active))
-    }
-    this.root.dataset.activeScreen = screen
-    if (screen === 'title') this.renderBest()
-    if (screen === 'leaderboard') this.renderLeaderboard()
-    if (screen === 'hud') this.stormShown = false
-    // Focus the first control so keyboard and gamepad players can act immediately.
-    requestAnimationFrame(() => {
-      const first = this.navItems()[0]
-      if (first && this.input.method !== 'touch') first.focus({ preventScroll: true })
-      else (document.activeElement as HTMLElement | null)?.blur?.()
-    })
-  }
-
-  setBootProgress(progress: number): void {
-    const bar = this.q<HTMLElement>('.boot-bar i')
-    bar.style.transform = `scaleX(${Math.max(0.04, Math.min(1, progress))})`
-  }
-
-  // ─── HUD ────────────────────────────────────────────────────────────────
 
   updateHud(run: RunState, compass: Compass | null): void {
-    this.set('cores', `${run.collected}<small>/${run.total}</small>`)
-    this.set('score', run.score.toLocaleString(this.i18n.locale))
-    this.set('clock', formatClock(run.timeLeft))
-    const low = run.timeLeft <= CONFIG.drones.rageAt
-    this.q('.hud-clock').classList.toggle('is-low', low)
-    if (low && !this.stormShown && run.phase === 'playing') {
-      this.stormShown = true
-      this.banner(this.i18n.t('hud.storm'))
-    }
-    const cells = this.q('.hud-cells')
-    if (cells.childElementCount !== CONFIG.run.lives) {
-      cells.innerHTML = `<span class="hud-cell">${ICON.cell}</span>`.repeat(CONFIG.run.lives)
-    }
-    for (const [i, cell] of this.qa('.hud-cell').entries()) cell.classList.toggle('is-empty', i >= run.lives)
-
-    const combo = this.q('.hud-combo')
-    combo.classList.toggle('is-active', run.combo > 1)
-    if (run.combo > 1) {
-      if (this.set('combo', `×${run.combo}`)) {
-        combo.classList.remove('pop')
-        void combo.offsetWidth
-        combo.classList.add('pop')
-      }
-      this.q<HTMLElement>('.hud-combo-bar i').style.transform = `scaleX(${run.comboTimer / CONFIG.score.comboWindow})`
-    }
-
-    const compassEl = this.q<HTMLElement>('.hud-compass')
-    compassEl.classList.toggle('is-hidden', !compass)
-    if (compass) {
-      this.q<HTMLElement>('.hud-compass-arrow').style.transform = `rotate(${-compass.angle}rad)`
-      this.set('distance', this.i18n.t('hud.nearest', { m: Math.round(compass.distance) }))
-      compassEl.dataset.rise = compass.rise > 2 ? 'up' : compass.rise < -2 ? 'down' : ''
-    }
-  }
-
-  popup(text: string, at: { x: number; y: number }, kind: 'score' | 'hurt'): void {
-    const el = document.createElement('div')
-    el.className = `popup popup-${kind}`
-    el.textContent = text
-    el.style.left = `${at.x}px`
-    el.style.top = `${at.y}px`
-    this.q('.popups').append(el)
-    el.addEventListener('animationend', () => el.remove())
-  }
-
-  hurt(): void {
-    const v = this.q('.hurt-vignette')
-    v.classList.remove('flash')
-    void (v as HTMLElement).offsetWidth
-    v.classList.add('flash')
-  }
-
-  hint(hint: Hint | null): void {
-    this.hintKey = hint
-    this.renderHint()
-  }
-
-  private renderHint(): void {
-    const el = this.q('.hint')
-    const hint = this.hintKey
-    if (!hint) {
-      el.classList.remove('is-active')
-      return
-    }
-    const method = this.input.method
-    const glyph = method === 'gamepad' ? GLYPH.gamepad : GLYPH.keyboard
-    const key = hint === 'cores' ? 'hint.cores' : `hint.${hint}.${method === 'touch' && hint === 'look' ? 'keyboard' : method}`
-    const vars = { keys: glyph.keys, stick: hint === 'look' ? GLYPH.gamepad.stickR : GLYPH.gamepad.keys, key: hint === 'dash' ? glyph.dash : glyph.jump }
-    el.querySelector('span')!.innerHTML = this.i18n.t(key, vars)
-    el.classList.add('is-active')
-  }
-
-  private banner(text: string): void {
-    const el = this.q('.banner')
-    el.textContent = text
-    el.classList.remove('show')
-    void (el as HTMLElement).offsetWidth
-    el.classList.add('show')
-  }
-
-  // ─── results ────────────────────────────────────────────────────────────
-
-  showResults(run: RunState): void {
     this.lastRun = run
-    this.savedRank = -1
-    const won = run.phase === 'won'
-    const el = this.q('[data-screen="results"]')
-    el.classList.toggle('is-won', won)
-    const titleKey = won ? 'results.won' : run.loseReason === 'time' ? 'results.lost.time' : 'results.lost.lives'
-    this.q('.results-title').setAttribute('data-i18n', titleKey)
-    const n = stars(run)
-    for (const [i, s] of this.qa('.results-stars .star').entries()) {
-      s.classList.toggle('is-on', i < n)
-      ;(s as HTMLElement).style.animationDelay = `${0.35 + i * 0.22}s`
-    }
-    const coreScore = run.score - run.timeBonus - run.lifeBonus
-    const fmt = (v: number) => v.toLocaleString(this.i18n.locale)
-    this.q('.r-cores').textContent = `${run.collected} / ${run.total}`
-    this.q('.r-core-score').textContent = fmt(coreScore)
-    this.q('.r-time').textContent = formatClock(run.elapsed)
-    this.q('.r-time-bonus').textContent = `+${fmt(run.timeBonus)}`
-    this.q('.r-life-bonus').textContent = `+${fmt(run.lifeBonus)}`
-    this.q('.r-total').textContent = fmt(run.score)
-    const best = this.save.data.leaderboard[0]?.score ?? 0
-    this.q('.results-best').classList.toggle('is-active', !run.unranked && run.score > best && run.score > 0)
-    const form = this.q('.results-save')
-    form.classList.toggle('is-hidden', run.unranked || run.score <= 0 || insertScore(this.save.data.leaderboard, this.entry(run)).rank < 0)
-    form.classList.remove('is-saved')
-    this.q<HTMLInputElement>('.results-name').value = this.save.data.playerName
-    this.q('.results-rank').textContent = ''
-    this.translate()
-    this.show('results')
+    this.text('.student-name', run.studentName)
+    this.text('.student-meta', `${run.gender} · ${run.lifeMode} · Semester ${run.semester}`)
+    this.text('.hud-clock', `${formatTime(run.clockMinutes)} · Day ${run.day}`)
+    this.text('.hud-weather', run.weather === 'monsoon' ? 'MONSOON' : run.weather.toUpperCase())
+    this.text('.hud-money', `₹${run.money.toLocaleString('en-IN')}`)
+    this.text('.hud-rep', `${run.reputation} REP`)
+    this.text('.hud-attendance', `${run.attendance}%`)
+    this.text('.hud-vehicle', run.vehicle)
+    this.text('.mission-title', run.missionTitle)
+    this.text('.mission-detail', run.missionDetail)
+    this.text('.status-line', this.lastStatus)
+    const attendance = this.root.querySelector<HTMLElement>('.attendance-fill'); if (attendance) attendance.style.width = `${run.attendance}%`
+    const reputation = this.root.querySelector<HTMLElement>('.rep-fill'); if (reputation) reputation.style.width = `${run.reputation}%`
+    const compassEl = this.root.querySelector<HTMLElement>('.compass-arrow'); if (compassEl && compass) compassEl.style.transform = `rotate(${compass.angle}rad)`
+    const distance = this.root.querySelector<HTMLElement>('.compass-distance'); if (distance && compass) distance.textContent = `${Math.round(compass.distance)} m`
+    const marker = this.root.querySelector<HTMLElement>('.mini-marker'); if (marker && compass) { marker.style.left = `${50 + Math.sin(compass.angle) * 32}%`; marker.style.top = `${50 + Math.cos(compass.angle) * 32}%` }
+    this.renderInventory(run.inventory)
   }
 
-  private entry(run: RunState) {
-    return { name: this.q<HTMLInputElement>('.results-name')?.value.trim().slice(0, 16) || this.save.data.playerName, score: run.score, seconds: Math.round(run.elapsed), at: Date.now() }
-  }
+  popup(text: string, at: { x: number; y: number }, kind: 'score' | 'hurt'): void { const el = document.createElement('div'); el.className = `popup ${kind}`; el.textContent = text; el.style.left = `${at.x}px`; el.style.top = `${at.y}px`; this.root.append(el); window.setTimeout(() => el.remove(), 1300) }
+  hurt(): void { this.root.querySelector('.hurt-vignette')?.classList.add('flash'); window.setTimeout(() => this.root.querySelector('.hurt-vignette')?.classList.remove('flash'), 240) }
+  hint(hint: Hint): void { this.hintText = hint === 'move' ? 'WASD move · Mouse look · Shift sprint' : hint === 'interact' ? 'Press E near a marker to interact' : hint === 'mission' ? 'Mission updated · Check the left rail' : ''; this.text('.hint-line', this.hintText) }
+  status(text: string): void { this.lastStatus = text; this.text('.status-line', text) }
+  showResults(run: RunState): void { this.lastRun = run; this.text('.result-title', 'Campus arc complete'); this.text('.result-copy', `You finished the first-year campus arc with ${run.reputation} reputation and ₹${run.money.toLocaleString('en-IN')}.`); this.show('results') }
 
-  private saveScore(): void {
-    if (!this.lastRun || this.lastRun.unranked || this.savedRank >= 0) return
-    const entry = this.entry(this.lastRun)
-    const { board, rank } = insertScore(this.save.data.leaderboard, entry)
-    this.save.update({ leaderboard: board, playerName: entry.name })
-    this.savedRank = rank
-    this.q('.results-save').classList.add('is-saved')
-    this.q('.results-rank').textContent = rank >= 0 ? this.i18n.t('results.rank', { rank: rank + 1 }) : ''
-    this.audio.play('ui')
-  }
-
-  private renderLeaderboard(): void {
-    const list = this.q('.board')
-    const board = this.save.data.leaderboard
-    if (board.length === 0) {
-      list.innerHTML = `<li class="board-empty">${this.i18n.t('leaderboard.empty')}</li>`
-      return
-    }
-    list.innerHTML = board
-      .map((e, i) => `<li class="${i === this.savedRank ? 'is-me' : ''}"><b>${i + 1}</b><span class="board-name"></span><span>${formatClock(e.seconds)}</span><em>${e.score.toLocaleString(this.i18n.locale)}</em></li>`)
-      .join('')
-    // Names are player-entered text: assign via textContent, never innerHTML.
-    list.querySelectorAll('.board-name').forEach((el, i) => (el.textContent = board[i].name))
-  }
-
-  private renderBest(): void {
-    const best = this.save.data.leaderboard[0]?.score ?? 0
-    const el = this.q('.title-best')
-    el.classList.toggle('is-hidden', best <= 0)
-    el.textContent = this.i18n.t('menu.best', { score: best.toLocaleString(this.i18n.locale) })
-  }
-
-  // ─── settings ───────────────────────────────────────────────────────────
-
-  /** Re-read the save into the Settings controls (call after changing settings outside the UI). */
   refreshSettings(): void {
     const d = this.save.data
-    this.q<HTMLInputElement>('[name="musicVolume"]').value = String(d.musicVolume)
-    this.q<HTMLInputElement>('[name="sfxVolume"]').value = String(d.sfxVolume)
-    this.q<HTMLInputElement>('[name="sensitivity"]').value = String(d.sensitivity)
-    for (const t of this.qa<HTMLButtonElement>('.toggle')) {
-      const on = d[t.dataset.setting as 'muted' | 'invertY' | 'reducedMotion'] === true
-      t.setAttribute('aria-pressed', String(on))
-      t.querySelector('span')!.setAttribute('data-i18n', on ? 'settings.on' : 'settings.off')
-    }
-    for (const b of this.qa<HTMLButtonElement>('.seg button')) {
-      const key = b.parentElement!.dataset.setting as 'quality' | 'locale'
-      const current = key === 'locale' ? this.i18n.locale : d.quality
-      b.setAttribute('aria-pressed', String(b.dataset.value === current))
-    }
-    for (const r of this.qa<HTMLInputElement>('input[type="range"]')) r.style.setProperty('--fill', `${((Number(r.value) - Number(r.min)) / (Number(r.max) - Number(r.min))) * 100}%`)
-    this.translate()
+    const music = this.root.querySelector<HTMLInputElement>('[name="musicVolume"]'); if (music) music.value = String(d.musicVolume)
+    const sfx = this.root.querySelector<HTMLInputElement>('[name="sfxVolume"]'); if (sfx) sfx.value = String(d.sfxVolume)
+    const sensitivity = this.root.querySelector<HTMLInputElement>('[name="sensitivity"]'); if (sensitivity) sensitivity.value = String(d.sensitivity)
+    this.root.querySelectorAll<HTMLButtonElement>('[data-toggle]').forEach(button => { const key = button.dataset.toggle as keyof SaveData; button.setAttribute('aria-pressed', String(d[key] === true)); button.querySelector('span')!.textContent = d[key] === true ? 'ON' : 'OFF' })
   }
 
-  // ─── events ─────────────────────────────────────────────────────────────
-
-  private onClick(e: MouseEvent): void {
-    const target = (e.target as HTMLElement).closest<HTMLElement>('[data-action], .toggle, .seg button')
+  private onClick(event: MouseEvent): void {
+    const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]')
     if (!target) return
-    this.audio.unlock()
-    if (target.matches('.toggle')) {
-      const key = target.dataset.setting as 'muted' | 'invertY' | 'reducedMotion'
-      this.actions.settings({ [key]: !this.save.data[key] })
-      this.refreshSettings()
-      this.audio.play('ui')
-      return
-    }
-    if (target.matches('.seg button')) {
-      const key = target.parentElement!.dataset.setting
-      if (key === 'quality') this.actions.settings({ quality: target.dataset.value as Quality })
-      if (key === 'locale') this.actions.settings({ locale: target.dataset.value as Locale })
-      this.refreshSettings()
-      this.audio.play('ui')
-      return
-    }
+    this.audio.unlock(); this.audio.play('ui')
     const action = target.dataset.action
-    switch (action) {
-      case 'play': this.actions.play(); break
-      case 'resume': this.actions.resume(); break
-      case 'restart': this.actions.restart(); break
-      case 'quit': this.actions.quit(); break
-      case 'settings': this.push('settings'); break
-      case 'leaderboard': this.push('leaderboard'); break
-      case 'back': this.back(); break
-      case 'save-score': this.saveScore(); break
-      case 'pause': window.dispatchEvent(new CustomEvent('game:pause')); break
-    }
+    if (action === 'play') { this.actions.play(); return }
+    if (action === 'restart') { this.actions.restart(); return }
+    if (action === 'resume') { this.actions.resume(); return }
+    if (action === 'quit') { this.actions.quit(); return }
+    if (action === 'settings') { this.show('settings'); return }
+    if (action === 'back') { this.back(); return }
+    if (action === 'pause') { window.dispatchEvent(new CustomEvent('game:pause')); return }
+    if (action === 'map' || action === 'phone' || action === 'inventory') { this.togglePanel(action); return }
+    if (action === 'gender') { this.actions.settings({ gender: target.dataset.value as SaveData['gender'] }); this.renderTitle(); return }
+    if (action === 'lifeMode') { this.actions.settings({ lifeMode: target.dataset.value as SaveData['lifeMode'] }); this.renderTitle(); return }
+    if (action === 'save') { this.actions.settings({}); this.status('Progress saved locally to this browser.'); return }
   }
 
-  private onInput(e: Event): void {
-    const el = e.target as HTMLInputElement
-    if (el.type !== 'range') return
-    el.style.setProperty('--fill', `${((Number(el.value) - Number(el.min)) / (Number(el.max) - Number(el.min))) * 100}%`)
-    this.actions.settings({ [el.name]: Number(el.value) } as Partial<SaveData>)
-  }
+  private onInput(event: Event): void { const target = event.target as HTMLInputElement; if (target.dataset.field === 'playerName') this.actions.settings({ playerName: target.value.slice(0, 18) }); if (target.name === 'musicVolume' || target.name === 'sfxVolume' || target.name === 'sensitivity') this.actions.settings({ [target.name]: Number(target.value) } as Partial<SaveData>) }
 
-  private onKey(e: KeyboardEvent): void {
-    if (this.screen === 'hud' || this.screen === 'boot') return
-    const typing = (e.target as HTMLElement).matches?.('input[type="text"]')
-    if ((e.code === 'Escape' || (e.code === 'Backspace' && !typing)) && this.screen !== 'title') {
-      // The pause toggle in main.ts owns Escape on the pause screen itself.
-      if (this.screen !== 'pause' && this.screen !== 'results') {
-        e.preventDefault()
-        // Escape is also the pause toggle; consume it so leaving Settings doesn't resume the run.
-        this.input.consume('pause')
-        this.back()
-      }
-      return
-    }
-    if (e.code === 'ArrowDown' || e.code === 'ArrowUp') {
-      e.preventDefault()
-      this.moveFocus(e.code === 'ArrowDown' ? 1 : -1)
-    }
-  }
+  private togglePanel(panel: 'map' | 'phone' | 'inventory'): void { this.mapOpen = panel === 'map' ? !this.mapOpen : false; this.phoneOpen = panel === 'phone' ? !this.phoneOpen : false; this.inventoryOpen = panel === 'inventory' ? !this.inventoryOpen : false; this.root.querySelector('[data-panel="map"]')?.classList.toggle('is-open', this.mapOpen); this.root.querySelector('[data-panel="phone"]')?.classList.toggle('is-open', this.phoneOpen); this.root.querySelector('[data-panel="inventory"]')?.classList.toggle('is-open', this.inventoryOpen); }
 
-  /** Per-frame gamepad menu navigation (keyboard uses native focus + onKey). */
-  frame(frameSeconds: number): void {
-    if (this.input.method !== this.lastMethod) {
-      this.lastMethod = this.input.method
-      this.renderPrompts()
-      this.renderHint()
-    }
-    if (this.screen === 'hud' || this.screen === 'boot') return
-    if (this.input.method !== 'gamepad') {
-      this.input.consume('confirm')
-      this.input.consume('back')
-      return
-    }
-    const y = this.input.move.y
-    const x = this.input.move.x
-    this.navRepeat = Math.max(0, this.navRepeat - frameSeconds)
-    const active = document.activeElement as HTMLElement | null
-    if (Math.abs(y) > 0.6 && this.navRepeat <= 0) {
-      this.moveFocus(y < 0 ? 1 : -1)
-      this.navRepeat = 0.22
-    } else if (Math.abs(x) > 0.6 && this.navRepeat <= 0 && active?.matches('input[type="range"]')) {
-      const r = active as HTMLInputElement
-      r.value = String(Number(r.value) + Math.sign(x) * Number(r.step || 0.1))
-      r.dispatchEvent(new Event('input', { bubbles: true }))
-      this.navRepeat = 0.12
-    } else if (Math.abs(x) > 0.6 && this.navRepeat <= 0 && active?.parentElement?.matches('.seg')) {
-      const sib = (Math.sign(x) > 0 ? active.nextElementSibling : active.previousElementSibling) as HTMLElement | null
-      sib?.focus()
-      this.navRepeat = 0.22
-    } else if (Math.abs(y) < 0.3 && Math.abs(x) < 0.3) {
-      this.navRepeat = 0
-    }
-    // Navigation and confirm may arrive together; activate the newly focused control.
-    if (this.input.consume('confirm')) (document.activeElement as HTMLElement | null)?.click()
-    if (this.input.consume('back') && this.screen !== 'title') this.back()
-  }
-
-  private navItems(): HTMLElement[] {
-    const screen = this.q(`[data-screen="${this.screen}"]`)
-    return [...screen.querySelectorAll<HTMLElement>('[data-nav]')].filter(el => el.offsetParent !== null && !el.closest('.is-hidden'))
-  }
-
-  private moveFocus(dir: 1 | -1): void {
-    const items = this.navItems()
-    if (items.length === 0) return
-    // Buttons inside one segmented control count as a single row.
-    const rows: HTMLElement[][] = []
-    for (const el of items) {
-      const seg = el.parentElement?.matches('.seg') ? el.parentElement : null
-      const last = rows[rows.length - 1]
-      if (seg && last && last[0].parentElement === seg) last.push(el)
-      else rows.push([el])
-    }
-    const current = rows.findIndex(r => r.includes(document.activeElement as HTMLElement))
-    const next = rows[(current + dir + rows.length) % rows.length]
-    ;(next.find(el => el.getAttribute('aria-pressed') === 'true') ?? next[0]).focus()
-  }
-
-  // ─── helpers ────────────────────────────────────────────────────────────
-
-  private translate(): void {
-    for (const el of this.root.querySelectorAll<HTMLElement>('[data-i18n]')) el.textContent = this.i18n.t(el.dataset.i18n!)
-    for (const el of this.root.querySelectorAll<HTMLElement>('[data-i18n-label]')) el.setAttribute('aria-label', this.i18n.t(el.dataset.i18nLabel!))
-    for (const el of this.root.querySelectorAll<HTMLInputElement>('[data-i18n-placeholder]')) el.placeholder = this.i18n.t(el.dataset.i18nPlaceholder!)
-    this.renderPrompts()
-    this.renderHint()
-    if (this.screen === 'title') this.renderBest()
-    if (this.screen === 'leaderboard') this.renderLeaderboard()
-    this.hudCache.clear()
-    document.title = this.i18n.t('game.title')
-  }
-
-  /** Bottom-bar button prompts follow the active input method. */
-  renderPrompts(): void {
-    const g = this.input.method === 'gamepad' ? GLYPH.gamepad : GLYPH.keyboard
-    const html = this.input.method === 'touch' ? '' : `<span>${g.select} ${this.i18n.t('prompt.select')}</span><span>${g.back} ${this.i18n.t('prompt.back')}</span>`
-    for (const el of this.qa('.prompts')) el.innerHTML = html
-  }
-
-  /** Update a HUD text slot only when it changed; returns true if it did. */
-  private set(slot: string, html: string): boolean {
-    if (this.hudCache.get(slot) === html) return false
-    this.hudCache.set(slot, html)
-    this.q(`[data-slot="${slot}"]`).innerHTML = html
-    return true
-  }
-
-  private q<T extends HTMLElement = HTMLElement>(sel: string): T {
-    return this.root.querySelector<T>(sel)!
-  }
-
-  private qa<T extends HTMLElement = HTMLElement>(sel: string): T[] {
-    return [...this.root.querySelectorAll<T>(sel)]
-  }
-
-  private template(): string {
-    const range = (name: string, label: string, min: number, max: number, step: number) =>
-      `<label class="row"><span data-i18n="${label}"></span><input data-nav type="range" name="${name}" min="${min}" max="${max}" step="${step}"></label>`
-    const toggle = (setting: string, label: string) =>
-      `<div class="row"><span data-i18n="${label}"></span><button data-nav class="toggle" data-setting="${setting}" aria-pressed="false"><i></i><span></span></button></div>`
-    return /* html */ `
-<section class="screen screen-boot is-active" data-screen="boot">
-  <div class="boot-logo" data-i18n="game.title"></div>
-  <div class="boot-bar"><i></i></div>
-  <div class="boot-label" data-i18n="boot.loading"></div>
-</section>
-
-<section class="screen screen-title" data-screen="title">
-  <div class="title-vignette"></div>
-  <div class="title-best is-hidden"></div>
-  <div class="title-block">
-    <div class="logo">
-      <span class="logo-gem">${ICON.core}</span>
-      <h1 class="logo-text" data-i18n="game.title"></h1>
-    </div>
-    <p class="tagline" data-i18n="game.tagline"></p>
-    <nav class="menu">
-      <button data-nav class="btn btn-primary" data-action="play"><span data-i18n="menu.play"></span></button>
-      <button data-nav class="btn" data-action="leaderboard"><span data-i18n="menu.leaderboard"></span></button>
-      <button data-nav class="btn" data-action="settings"><span data-i18n="menu.settings"></span></button>
-    </nav>
-  </div>
-  <footer class="bottom-bar"><div class="prompts"></div><small data-i18n="credits.fonts"></small></footer>
-</section>
-
-<section class="screen screen-hud" data-screen="hud">
-  <div class="hurt-vignette"></div>
-  <div class="popups"></div>
-  <div class="hud-top-left">
-    <div class="hud-panel hud-cores"><span class="hud-core-icon">${ICON.core}</span><b data-slot="cores"></b></div>
-    <div class="hud-score"><span data-i18n="hud.score"></span><b data-slot="score"></b></div>
-  </div>
-  <div class="hud-top-center">
-    <div class="hud-clock"><b data-slot="clock"></b></div>
-    <div class="hud-compass"><span class="hud-compass-arrow">${ICON.arrow}</span><b data-slot="distance"></b></div>
-  </div>
-  <div class="hud-top-right">
-    <div class="hud-cells">${`<span class="hud-cell">${ICON.cell}</span>`.repeat(CONFIG.run.lives)}</div>
-    <button class="hud-pause" data-action="pause" data-i18n-label="touch.pause">${ICON.pause}</button>
-  </div>
-  <div class="hud-combo"><b data-slot="combo"></b><span data-i18n="hud.combo"></span><div class="hud-combo-bar"><i></i></div></div>
-  <div class="banner"></div>
-  <div class="hint"><span></span></div>
-  <div class="touch">
-    <div class="touch-stick"><i></i></div>
-    <button class="touch-btn touch-dash" data-touch="dash"><span data-i18n="touch.dash"></span></button>
-    <button class="touch-btn touch-jump" data-touch="jump"><span data-i18n="touch.jump"></span></button>
-  </div>
-</section>
-
-<section class="screen screen-pause screen-modal" data-screen="pause">
-  <div class="modal">
-    <h2 class="modal-title" data-i18n="pause.title"></h2>
-    <nav class="menu">
-      <button data-nav class="btn btn-primary" data-action="resume"><span data-i18n="menu.continue"></span></button>
-      <button data-nav class="btn" data-action="restart"><span data-i18n="menu.restart"></span></button>
-      <button data-nav class="btn" data-action="settings"><span data-i18n="menu.settings"></span></button>
-      <button data-nav class="btn" data-action="quit"><span data-i18n="menu.quit"></span></button>
-    </nav>
-  </div>
-  <footer class="bottom-bar"><div class="prompts"></div></footer>
-</section>
-
-<section class="screen screen-settings screen-modal" data-screen="settings">
-  <div class="modal modal-wide">
-    <h2 class="modal-title" data-i18n="settings.title"></h2>
-    <div class="settings-grid">
-      <fieldset><legend data-i18n="settings.audio"></legend>
-        ${range('musicVolume', 'settings.music', 0, 1, 0.05)}
-        ${range('sfxVolume', 'settings.sfx', 0, 1, 0.05)}
-        ${toggle('muted', 'settings.mute')}
-      </fieldset>
-      <fieldset><legend data-i18n="settings.controls"></legend>
-        ${range('sensitivity', 'settings.sensitivity', 0.2, 3, 0.1)}
-        ${toggle('invertY', 'settings.invertY')}
-      </fieldset>
-      <fieldset><legend data-i18n="settings.display"></legend>
-        <div class="row"><span data-i18n="settings.quality"></span><div class="seg" data-setting="quality">
-          <button data-nav data-value="low" data-i18n="settings.quality.low"></button><button data-nav data-value="medium" data-i18n="settings.quality.medium"></button><button data-nav data-value="high" data-i18n="settings.quality.high"></button>
-        </div></div>
-        ${toggle('reducedMotion', 'settings.reducedMotion')}
-        <div class="row"><span data-i18n="settings.language"></span><div class="seg" data-setting="locale">
-          <button data-nav data-value="en" lang="en">English</button><button data-nav data-value="zh-CN" lang="zh-CN">简体中文</button>
-        </div></div>
-      </fieldset>
-    </div>
-    <nav class="menu menu-row"><button data-nav class="btn" data-action="back"><span data-i18n="menu.back"></span></button></nav>
-  </div>
-  <footer class="bottom-bar"><div class="prompts"></div></footer>
-</section>
-
-<section class="screen screen-leaderboard screen-modal" data-screen="leaderboard">
-  <div class="modal">
-    <h2 class="modal-title" data-i18n="leaderboard.title"></h2>
-    <div class="board-head"><b>#</b><span></span><span data-i18n="leaderboard.time"></span><em data-i18n="leaderboard.score"></em></div>
-    <ol class="board"></ol>
-    <nav class="menu menu-row"><button data-nav class="btn" data-action="back"><span data-i18n="menu.back"></span></button></nav>
-  </div>
-  <footer class="bottom-bar"><div class="prompts"></div></footer>
-</section>
-
-<section class="screen screen-results screen-modal" data-screen="results">
-  <div class="modal modal-results">
-    <div class="results-stars">${`<span class="star">${ICON.star}</span>`.repeat(3)}</div>
-    <h2 class="results-title modal-title"></h2>
-    <div class="results-best" data-i18n="results.newBest"></div>
-    <dl class="results-table">
-      <div><dt data-i18n="results.cores"></dt><dd class="r-cores"></dd><dd class="r-core-score"></dd></div>
-      <div><dt data-i18n="results.time"></dt><dd class="r-time"></dd><dd></dd></div>
-      <div class="r-bonus"><dt data-i18n="results.timeBonus"></dt><dd></dd><dd class="r-time-bonus"></dd></div>
-      <div class="r-bonus"><dt data-i18n="results.lifeBonus"></dt><dd></dd><dd class="r-life-bonus"></dd></div>
-      <div class="r-total-row"><dt data-i18n="results.total"></dt><dd></dd><dd class="r-total"></dd></div>
-    </dl>
-    <div class="results-save">
-      <input data-nav class="results-name" type="text" maxlength="16" autocomplete="off" spellcheck="false" data-i18n-placeholder="results.name">
-      <button data-nav class="btn btn-small" data-action="save-score"><span data-i18n="results.save"></span></button>
-      <span class="results-saved" data-i18n="results.saved"></span>
-      <span class="results-rank"></span>
-    </div>
-    <nav class="menu menu-row">
-      <button data-nav class="btn btn-primary" data-action="restart"><span data-i18n="results.retry"></span></button>
-      <button data-nav class="btn" data-action="quit"><span data-i18n="results.title"></span></button>
-    </nav>
-  </div>
-</section>`
-  }
+  private renderTitle(): void { this.text('.profile-name', this.save.data.playerName); this.text('.profile-gender', this.save.data.gender); this.text('.profile-mode', this.save.data.lifeMode); this.root.querySelectorAll('[data-value]').forEach(el => el.classList.toggle('selected', (el as HTMLElement).dataset.value === this.save.data.gender || (el as HTMLElement).dataset.value === this.save.data.lifeMode)) }
+  private renderInventory(items: SaveData['inventory']): void { const list = this.root.querySelector<HTMLElement>('.inventory-list'); if (!list) return; list.innerHTML = items.map(item => `<li><span>${escapeHtml(item.label)}</span><b>x${item.qty}</b></li>`).join('') }
+  private text(selector: string, value: string): void { const el = this.root.querySelector<HTMLElement>(selector); if (el) el.textContent = value }
+  private template(): string { return `
+    <section class="screen boot" data-screen="boot"><div class="brand-mark">RC<span>•</span></div><h1>REAL COLLEGE<br><em>STUDENT HD</em></h1><p>Namakkal · Tamil Nadu · Campus life, on your terms</p><div class="boot-progress"><i></i></div><small>Loading campus systems</small></section>
+    <section class="screen title" data-screen="title"><div class="title-copy"><div class="eyebrow">CMSCE // NAMAKKAL DISTRICT</div><h1>Real College<br><em>Student HD</em></h1><p class="tagline">Show up. Skill up. Move forward.</p><p class="disclaimer">Original, stylized campus-life game. Public-source facts are separated from fictionalized gameplay.</p><button class="primary" data-action="play">START YOUR DAY <span>↗</span></button><button class="quiet" data-action="settings">Settings</button></div><div class="profile-card"><div class="section-label">STUDENT PROFILE</div><label>Name<input data-field="playerName" maxlength="18" value="${escapeHtml(this.save.data.playerName)}"></label><div class="section-label">IDENTITY</div><div class="choice-row"><button data-action="gender" data-value="Male">Male</button><button data-action="gender" data-value="Female">Female</button></div><div class="section-label">LIFE MODE</div><div class="choice-row"><button data-action="lifeMode" data-value="Hostel">Hostel</button><button data-action="lifeMode" data-value="Day Scholar">Day Scholar</button></div><div class="profile-summary"><b class="profile-name">${escapeHtml(this.save.data.playerName)}</b><span class="profile-gender">${this.save.data.gender}</span><span class="profile-mode">${this.save.data.lifeMode}</span></div></div><div class="title-stamp">01<br><small>FIRST YEAR<br>SEM 01</small></div></section>
+    <section class="screen hud" data-screen="hud"><div class="topbar"><div><div class="hud-kicker">CMSCE / ERANAPURAM</div><strong class="student-name">Arun</strong><span class="student-meta">Male · Day Scholar · Semester 1</span></div><div class="top-stats"><span class="hud-money">₹850</span><span class="hud-rep">12 REP</span><span class="hud-clock">08:20 · Day 1</span><span class="hud-weather">CLEAR</span></div></div><aside class="mission-rail"><div class="rail-kicker">ACTIVE OBJECTIVE</div><h2 class="mission-title">Morning attendance</h2><p class="mission-detail">Reach the Classroom Block and check in before the lecture starts.</p><div class="progress-label"><span>ATTENDANCE</span><b class="hud-attendance">78%</b></div><div class="progress"><i class="attendance-fill"></i></div><div class="progress-label"><span>REPUTATION</span><b>100</b></div><div class="progress"><i class="rep-fill"></i></div><div class="rail-actions"><button data-action="map">M Map</button><button data-action="phone">P Phone</button><button data-action="inventory">I Bag</button></div></aside><div class="minimap"><div class="mini-grid"></div><span class="mini-label">CAMPUS / CITY EDGE</span><i class="mini-player"></i><i class="mini-marker"></i><div class="compass-arrow">▲</div><span class="compass-distance">0 m</span></div><div class="location-chip"><span class="pulse-dot"></span><b>CMS College of Engineering</b><span class="hud-vehicle">On Foot</span></div><div class="hint-line">WASD move · Mouse look · Shift sprint</div><div class="status-line">Walk to a route marker and press E to interact.</div><div class="quickbar"><button data-action="pause">Esc <span>Pause</span></button><span class="keycap">E</span><span>Interact</span></div><div class="hurt-vignette"></div><div class="panel" data-panel="map"><div class="panel-head"><span>FIELD MAP</span><button data-action="map">×</button></div><div class="map-large"><div class="map-road r1"></div><div class="map-road r2"></div><div class="map-campus">CMSCE CAMPUS</div><span class="map-pin p1">CLASSROOMS</span><span class="map-pin p2">LIBRARY</span><span class="map-pin p3">LABS</span><span class="map-pin p4">NAMAKKAL</span></div><p>Teal markers are public-place categories. Exact layout, traffic and schedules are fictionalized for gameplay.</p></div><div class="panel phone-panel" data-panel="phone"><div class="panel-head"><span>STUDENT PHONE</span><button data-action="phone">×</button></div><div class="phone-time">08:20</div><div class="phone-apps"><button>Timetable</button><button>Campus Map</button><button>Clubs</button><button>Messages</button></div><p>Today's nudge: attendance is a long game. Keep it above the threshold.</p></div><div class="panel inventory-panel" data-panel="inventory"><div class="panel-head"><span>INVENTORY</span><button data-action="inventory">×</button></div><ul class="inventory-list"></ul><button class="quiet" data-action="save">Save progress</button></div></section>
+    <section class="screen pause" data-screen="pause"><div class="pause-card"><div class="eyebrow">DAY ${this.save.data.day} / SEM ${this.save.data.semester}</div><h2>PAUSED</h2><button class="primary" data-action="resume">Resume</button><button data-action="settings">Settings</button><button data-action="quit">Quit to title</button></div></section>
+    <section class="screen settings" data-screen="settings"><div class="settings-card"><div class="panel-head"><span>SETTINGS</span><button data-action="back">×</button></div><label>Music<input type="range" name="musicVolume" min="0" max="1" step="0.05"></label><label>Effects<input type="range" name="sfxVolume" min="0" max="1" step="0.05"></label><label>Look sensitivity<input type="range" name="sensitivity" min="0.2" max="3" step="0.1"></label><button class="quiet" data-action="back">Back</button></div></section>
+    <section class="screen results" data-screen="results"><div class="result-card"><div class="eyebrow">STORY ARC // COMPLETE</div><h2 class="result-title">Campus arc complete</h2><p class="result-copy"></p><button class="primary" data-action="restart">Continue exploring</button><button data-action="quit">Return to title</button></div></section><div class="popup-layer"></div><div class="touch"><div class="touch-stick"><i></i></div><div class="touch-buttons"><button data-touch="jump">JUMP</button><button data-touch="dash">RUN</button></div></div>
+  ` }
 }
+
+function formatTime(minutes: number): string { const h = Math.floor(minutes / 60) % 24; const m = Math.floor(minutes % 60).toString().padStart(2, '0'); return `${String(h).padStart(2, '0')}:${m}` }
+function escapeHtml(value: string): string { return value.replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char] ?? char)) }

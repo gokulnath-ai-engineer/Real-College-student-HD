@@ -1,15 +1,13 @@
-/**
- * Versioned local save. Everything the player keeps between sessions lives in one JSON record so
- * it is easy to migrate. Corrupt or foreign data falls back to defaults instead of crashing.
- */
 export type Locale = 'en' | 'zh-CN'
 export type Quality = 'low' | 'medium' | 'high'
+export type Gender = 'Male' | 'Female'
+export type LifeMode = 'Hostel' | 'Day Scholar'
 
+export type InventoryItem = { id: string; label: string; qty: number; kind: 'tool' | 'document' | 'food' | 'collectible' }
 export type ScoreEntry = { name: string; score: number; seconds: number; at: number }
 
 export type SaveData = {
-  version: 1
-  /** '' = never chosen; the game follows the browser language until the player picks one. */
+  version: 2
   locale: Locale | ''
   musicVolume: number
   sfxVolume: number
@@ -20,15 +18,26 @@ export type SaveData = {
   reducedMotion: boolean
   tutorialDone: boolean
   playerName: string
+  gender: Gender
+  lifeMode: LifeMode
+  semester: number
+  attendance: number
+  money: number
+  reputation: number
+  missionIndex: number
+  day: number
+  clockMinutes: number
+  weather: 'clear' | 'monsoon' | 'overcast'
+  inventory: InventoryItem[]
   leaderboard: ScoreEntry[]
 }
 
-export const SAVE_KEY = 'game3d.save'
+export const SAVE_KEY = 'collegehd.save'
 export const LEADERBOARD_SIZE = 10
 
 export function defaultSave(): SaveData {
   return {
-    version: 1,
+    version: 2,
     locale: '',
     musicVolume: 0.7,
     sfxVolume: 0.8,
@@ -38,14 +47,27 @@ export function defaultSave(): SaveData {
     quality: 'high',
     reducedMotion: false,
     tutorialDone: false,
-    playerName: 'PLAYER',
+    playerName: 'Arun',
+    gender: 'Male',
+    lifeMode: 'Day Scholar',
+    semester: 1,
+    attendance: 78,
+    money: 850,
+    reputation: 12,
+    missionIndex: 0,
+    day: 1,
+    clockMinutes: 8 * 60 + 20,
+    weather: 'clear',
+    inventory: [
+      { id: 'id-card', label: 'CMSCE ID Card', qty: 1, kind: 'document' },
+      { id: 'notebook', label: 'Project Notebook', qty: 1, kind: 'tool' },
+    ],
     leaderboard: [],
   }
 }
 
-const clamp01 = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback)
+const clamp = (value: unknown, min: number, max: number, fallback: number): number => typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback
 
-/** Parse untrusted stored JSON into a valid SaveData (pure; unit tested). */
 export function parseSave(raw: string | null): SaveData {
   const base = defaultSave()
   if (!raw) return base
@@ -57,13 +79,14 @@ export function parseSave(raw: string | null): SaveData {
   } catch {
     return base
   }
-  if (data.version !== 1) return base
-  const board = Array.isArray(data.leaderboard) ? data.leaderboard : []
+  if (data.version !== 1 && data.version !== 2) return base
+  const inventory = Array.isArray(data.inventory) ? data.inventory : base.inventory
   return {
-    version: 1,
-    locale: data.locale === 'en' || data.locale === 'zh-CN' ? data.locale : '',
-    musicVolume: clamp01(data.musicVolume, base.musicVolume),
-    sfxVolume: clamp01(data.sfxVolume, base.sfxVolume),
+    ...base,
+    version: 2,
+    locale: data.locale === 'en' || data.locale === 'zh-CN' ? data.locale : base.locale,
+    musicVolume: clamp(data.musicVolume, 0, 1, base.musicVolume),
+    sfxVolume: clamp(data.sfxVolume, 0, 1, base.sfxVolume),
     muted: data.muted === true,
     sensitivity: typeof data.sensitivity === 'number' && data.sensitivity >= 0.2 && data.sensitivity <= 3 ? data.sensitivity : base.sensitivity,
     invertY: data.invertY === true,
@@ -71,14 +94,24 @@ export function parseSave(raw: string | null): SaveData {
     reducedMotion: data.reducedMotion === true,
     tutorialDone: data.tutorialDone === true,
     playerName: typeof data.playerName === 'string' && data.playerName.trim() ? data.playerName.trim().slice(0, 16) : base.playerName,
-    leaderboard: board
-      .filter((e): e is ScoreEntry => !!e && typeof e === 'object' && typeof (e as ScoreEntry).name === 'string' && Number.isFinite((e as ScoreEntry).score))
-      .map(e => ({ name: e.name.slice(0, 16), score: Math.max(0, Math.floor(e.score)), seconds: Number.isFinite(e.seconds) ? e.seconds : 0, at: Number.isFinite(e.at) ? e.at : 0 }))
-      .slice(0, LEADERBOARD_SIZE),
+    gender: data.gender === 'Female' ? 'Female' : 'Male',
+    lifeMode: data.lifeMode === 'Hostel' ? 'Hostel' : 'Day Scholar',
+    semester: Math.round(clamp(data.semester, 1, 8, base.semester)),
+    attendance: Math.round(clamp(data.attendance, 0, 100, base.attendance)),
+    money: Math.round(clamp(data.money, 0, 999999, base.money)),
+    reputation: Math.round(clamp(data.reputation, 0, 100, base.reputation)),
+    missionIndex: Math.round(clamp(data.missionIndex, 0, 5, base.missionIndex)),
+    day: Math.max(1, Math.round(clamp(data.day, 1, 999, base.day))),
+    clockMinutes: clamp(data.clockMinutes, 0, 1439, base.clockMinutes),
+    weather: data.weather === 'monsoon' || data.weather === 'overcast' ? data.weather : 'clear',
+    inventory: inventory
+      .filter((item): item is InventoryItem => !!item && typeof item === 'object' && typeof (item as InventoryItem).id === 'string' && typeof (item as InventoryItem).label === 'string')
+      .map(item => ({ id: item.id.slice(0, 40), label: item.label.slice(0, 60), qty: Math.max(1, Math.floor(Number(item.qty) || 1)), kind: (item.kind === 'food' || item.kind === 'collectible' || item.kind === 'document' ? item.kind : 'tool') as InventoryItem['kind'] }))
+      .slice(0, 32),
+    leaderboard: Array.isArray(data.leaderboard) ? data.leaderboard.filter((entry): entry is ScoreEntry => !!entry && typeof entry === 'object' && typeof (entry as ScoreEntry).name === 'string' && Number.isFinite((entry as ScoreEntry).score)).map(entry => ({ name: entry.name.slice(0, 18), score: Math.max(0, Math.floor(entry.score)), seconds: Math.max(0, Math.floor(entry.seconds || 0)), at: entry.at || 0 })).slice(0, LEADERBOARD_SIZE) : base.leaderboard,
   }
 }
 
-/** Insert a run into a bounded, deterministically ordered leaderboard (higher score, then faster, then earlier). */
 export function insertScore(board: ScoreEntry[], entry: ScoreEntry): { board: ScoreEntry[]; rank: number } {
   const next = [...board, entry].sort((a, b) => b.score - a.score || a.seconds - b.seconds || a.at - b.at).slice(0, LEADERBOARD_SIZE)
   return { board: next, rank: next.indexOf(entry) }
@@ -89,20 +122,12 @@ export class SaveStore {
 
   constructor(private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | undefined = globalThis.localStorage) {
     let raw: string | null = null
-    try {
-      raw = this.storage?.getItem(SAVE_KEY) ?? null
-    } catch {
-      raw = null
-    }
+    try { raw = this.storage?.getItem(SAVE_KEY) ?? null } catch { raw = null }
     this.data = parseSave(raw)
   }
 
   update(patch: Partial<SaveData>): void {
     this.data = { ...this.data, ...patch }
-    try {
-      this.storage?.setItem(SAVE_KEY, JSON.stringify(this.data))
-    } catch {
-      // Private browsing or quota: the game keeps working with in-memory settings.
-    }
+    try { this.storage?.setItem(SAVE_KEY, JSON.stringify(this.data)) } catch { /* Keep the in-memory save alive. */ }
   }
 }

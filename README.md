@@ -1,95 +1,52 @@
-# game-3d starter (three.js + Rapier)
+# Real College Student HD
 
-A complete, small 3D game — **Sky Cores**: run, jump and dash across floating islands to collect
-every energy core before the clock runs out, avoiding patrol drones. It exists to be *changed*:
-the engine layer is fixed scaffolding, the game layer is the part you rewrite.
+A browser-playable Three.js college-life open-world vertical slice set in a stylized, source-grounded CMS College of Engineering / Namakkal district edge. It uses original procedural geometry plus one approved original campus-shuttle model; it does not contain GTA assets, names, logos, characters or map geometry.
+
+## Quick start
 
 ```bash
 pnpm install
-pnpm dev      # http://localhost:5173
-pnpm build    # typecheck + production build + JS/font budgets + total-size report
-pnpm test     # unit tests (rules, save, i18n, level)
-pnpm smoke    # after build: headless browser playthrough + screenshots in shots/
+pnpm dev --host 0.0.0.0 --port 3000
 ```
 
-## Layout
+Then open the Vite URL. For a production build and checks:
 
-| Path | Role | Change it? |
-| --- | --- | --- |
-| `src/engine/loop.ts` | Fixed 60 Hz simulation + interpolated rendering | Rarely |
-| `src/engine/input.ts` | Keyboard/mouse, gamepad, touch → one action state | Add actions here |
-| `src/engine/physics.ts` | Rapier world, collider helpers, render interpolation | Rarely |
-| `src/engine/renderer.ts` | WebGL renderer, quality presets, bloom | Rarely |
-| `src/engine/audio.ts` | Music/SFX buses, synthesized SFX, `load()` for files | Add sounds |
-| `src/engine/save.ts` | Versioned localStorage save + leaderboard | Add fields + parsing |
-| `src/engine/i18n.ts` | en / zh-CN, browser detection, saved choice wins | Rarely |
-| `src/engine/assets.ts` | Cached GLTF/texture loading with progress | Use it for models |
-| `src/game/config.ts` | Source defaults and active gameplay configuration | Yes |
-| `src/game/tuning.ts` | Tweak catalog, atomic validation and activation boundaries | Yes |
-| `src/game/rules.ts` | Pure score/lives/clock/win rules (unit tested) | Yes |
-| `src/game/world.ts` | Level layout, sky, lights, islands, stones, lifts | Yes |
-| `src/game/player.ts` | Character controller + game feel + procedural model | Yes |
-| `src/game/*.ts` | Camera, cores, drones, particles, scene orchestration | Yes |
-| `src/ui/`, `src/styles/main.css` | HTML/CSS title, HUD, pause, settings, results | Yes |
-| `src/i18n/*.json` | All player-facing text (both files, same keys) | Yes |
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm smoke
+```
 
-## Rules for changes
+The current managed project directory is `/home/ubuntu/collegehd`. `pnpm build` writes `dist/`; `pnpm smoke` serves that production bundle and validates title boot, movement, time, pause/settings, completion, locale and mobile HUD behavior.
 
-- **Simulation in `step()`, visuals in `render()`/`animate()`.** Gameplay state only changes in
-  fixed steps; read presses there with `input.consume(action)`, never `pressed()`.
-- **Rules stay pure.** Scoring, win/lose and progression go in `rules.ts` with tests; scene code
-  reports events and reads state.
-- **Every visible string is an i18n key** in both `en.json` and `zh-CN.json` (a test enforces
-  matching keys and placeholders). English and Chinese use the bundled Manus CC0 fonts in `public/fonts/`;
-  if you add new Chinese text, check it renders (missing glyphs fall back to system fonts).
-- **UI is HTML/CSS**, not canvas. Keep the game look: display font, outlined text, hard offset
-  shadows, skewed buttons, notched panels. Menus must stay keyboard/gamepad navigable
-  (`data-nav` on focusable controls).
-- **Colliders come from the helpers** in `physics.ts` with the same sizes as the meshes.
-- Keep `npm run build` within the JS/font budgets (`scripts/check-size.mjs`) and `npm run smoke` green.
-  Total game asset size is reported without a hard limit.
+## Delivered gameplay
 
-## Controls
+Create a named male or female student and choose hostel or day-scholar life. Explore a stylized CMSCE campus with a main gate, classrooms, engineering labs, library, canteen, hostel quad, placement cell and sports ground. Continue onto an Eranapuram/Namakkal district edge with shops, bus-stand transport, a hill-temple view and traffic.
 
-Keyboard/mouse: WASD move, mouse look (click to capture), Space jump (hold = higher), Shift
-sprint, F or left click dash, Esc pause. Gamepad: left stick, right stick, A jump, X/RB dash,
-LB sprint, Start pause. Touch: left-side stick, right-side drag to look, JUMP / DASH buttons.
+Walk, sprint, jump, dash, interact with a bike, car or college bus, and follow a first-year mission arc covering attendance, project submission, lab orientation, placement preparation and campus activity. Attendance, money, reputation, inventory, mission progress and day/clock state persist locally. The game has clear/overcast/monsoon weather, a day/night light cycle, scheduled student/faculty NPC routes, traffic, minimap, map, phone, inventory, settings and save/load feedback.
 
-## Credits
+Semester exams, richer sport simulations, club/symposium/hackathon content, placement interviews and graduation are modeled as documented extension points rather than falsely presented as full AAA systems in this vertical slice. See `docs/README.md` for the extension map.
 
-Fonts: ManusCC0 (regular, medium, bold) and ManusCC0 Sans CJK SC — CC0 1.0.
-The bundled Chinese font preserves its 6,547-codepoint repertoire; no font download is required.
-See `public/fonts/ManusCC0-LICENSE.txt`.
-Libraries: three.js (MIT), Rapier (Apache-2.0).
+## Repository map
 
-## Preview Tweak
+- `src/engine/`: loop, input, Rapier physics, renderer, audio, assets, save and i18n.
+- `src/game/game.ts`: simulation coordinator, time/weather, missions, interactions and persistence hooks.
+- `src/game/world.ts`: campus/city district, buildings, roads, NPC schedules, traffic, weather and landmarks.
+- `src/game/player.ts`: original readable student avatar and movement controller.
+- `src/ui/ui.ts`, `src/styles/`: title, HUD, mission rail, minimap, phone, inventory, settings, pause and results.
+- `assets/models/`: generated campus-shuttle model input.
+- `assets/share/`: game-specific favicon and share cover.
+- `docs/public-sources.md`: public facts and fictionalization boundary.
+- `docs/assets.md`: asset inventory and licensing boundary.
+- `docs/database-schema.md`: versioned local save schema and future data model.
+- `docs/README.md`: controls, build/run instructions and extension notes.
+- `game-sharing.json`: prepared share metadata.
 
-`src/game/tuning.ts` is this game's parameter manager. The Addon panel reads its
-catalog; `config.ts` owns source defaults and the active configuration used by gameplay.
-When adapting the game, keep only controls with actual gameplay consumers, and preserve
-stable IDs for unchanged parameters. Define ranges, units and the correct activation
-boundary. Register through `scripts/manus-tuning/adapter.js` only under `import.meta.env.DEV`.
-Keep the Vite plugin and `scripts/__manus__/` helpers intact; production builds exclude
-the browser adapter and never inject the bridge.
+## Content and copyright boundary
 
-Apply changes preview state only. `LIVE` parameters are read in the next game update;
-`NEXT_ACTION` parameters activate at the relevant jump/dash start; `NEXT_RUN` parameters
-activate in `Game.start`. Model/collider size and gravity are not exposed by this version.
-Do not mutate the source defaults or persist Apply to localStorage. Save with Manus
-checks the snapshot against the current catalog and edits `DEFAULT_CONFIG`, then uses
-the normal Three.js Web build/checkpoint workflow. Keep existing gameplay parameter
-managers when extending an older project; do not create a competing store.
+Public facts are limited to institution-level information from CMSCE's official site and broad Namakkal tourism landmark categories. Exact building positions, routes, NPC names, schedules, traffic, prices, dialogue, mission rewards and event outcomes are fictionalized game content. No private data or copied photography is shipped. See `docs/public-sources.md`.
 
-For server-authoritative multiplayer, expose local cosmetic controls only until gameplay
-parameters have explicit server-side development support. The descriptor's GAMEPLAY flag
-is a classification, not server authorization or ranked-score enforcement.
+## Licensing
 
-The preview plugin reads the ignored `.manus-webdev/preview-identity.json` v1 projection
-written by the Runtime when initializing, attaching or restoring this project. It contains
-only the resource ID and canonical project directory; private Host bindings and starter
-receipts are not template dependencies. Missing identity disables the bridge.
-The manager latches `tuning.unranked` when non-default GAMEPLAY values become active and
-resets it only at the next run using that run's active values. `Game` snapshots this onto
-`RunState.unranked`; local results cannot save such runs. Preserve this guard when changing
-scoring. When adding online leaderboards, skip submissions for unranked runs and enforce
-eligibility in the authoritative server too; client flags are not proof of a fair score.
+The generated model is original to this project. The bundled Manus fonts are CC0 as documented in `public/fonts/ManusCC0-LICENSE.txt`. Three.js and Rapier retain their upstream licenses.

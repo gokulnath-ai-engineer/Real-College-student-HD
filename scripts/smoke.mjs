@@ -41,18 +41,18 @@ async function openGame(context, errors) {
   page.on('pageerror', e => errors.push(String(e)))
   page.on('response', r => r.status() >= 400 && errors.push(`HTTP ${r.status()} ${r.url()}`))
   await page.goto(url)
-  await page.waitForSelector('[data-screen="title"].is-active', { timeout: 30_000 })
+  await page.waitForSelector('section[data-screen="title"].is-active', { timeout: 30_000 })
   await page.evaluate(async () => {
     await document.fonts.ready
     const expected = document.documentElement.lang === 'zh-CN' ? 'ManusCC0 Sans CJK SC' : 'ManusCC0'
-    for (const selector of ['.logo-text', '.tagline']) {
+    for (const selector of ['.title h1', '.tagline']) {
       const family = getComputedStyle(document.querySelector(selector)).fontFamily
-      if (!family.startsWith(`"${expected}"`) && !family.startsWith(expected + ',')) {
+      if (!family.startsWith(`"Manus"`) && !family.startsWith('Manus,')) {
         throw new Error(`Unexpected game font: ${family}`)
       }
     }
-    if (![...document.fonts].some(face => face.family.replaceAll('"', '').replaceAll("'", '') === expected && face.status === 'loaded')) {
-      throw new Error(`Bundled font did not load: ${expected}`)
+    if (![...document.fonts].some(face => face.family.replaceAll('"', '').replaceAll("'", '') === 'Manus' && face.status === 'loaded')) {
+      throw new Error('Bundled font did not load: Manus')
     }
   })
   await page.waitForTimeout(900)
@@ -77,7 +77,7 @@ try {
   await page.screenshot({ path: `${out}/01-title-en.png` })
 
   await page.click('[data-action="play"]')
-  await page.waitForSelector('[data-screen="hud"].is-active')
+  await page.waitForSelector('section[data-screen="hud"].is-active')
   const before = await state(page)
   await page.keyboard.down('KeyW')
   await page.waitForTimeout(700)
@@ -89,34 +89,33 @@ try {
   const after = await state(page)
   const moved = Math.hypot(after.pos.x - before.pos.x, after.pos.z - before.pos.z)
   if (after.mode !== 'playing') throw new Error(`expected playing, got ${after.mode}`)
-  if (!(after.run.timeLeft < before.run.timeLeft)) throw new Error('clock did not run')
+  if (!(after.run.clockMinutes > before.run.clockMinutes)) throw new Error('clock did not run')
   if (moved < 2) throw new Error(`player barely moved (${moved.toFixed(2)} m)`)
-  console.log(`smoke: moved ${moved.toFixed(1)} m, clock ${after.run.timeLeft.toFixed(1)} s`)
+  console.log(`smoke: moved ${moved.toFixed(1)} m, clock ${after.run.clockMinutes.toFixed(1)} min`)
 
   await page.keyboard.press('Escape')
-  await page.waitForSelector('[data-screen="pause"].is-active')
+  await page.waitForSelector('section[data-screen="pause"].is-active')
   await page.waitForTimeout(400)
   await page.screenshot({ path: `${out}/03-pause.png` })
-  await page.click('[data-screen="pause"] [data-action="settings"]')
-  await page.waitForSelector('[data-screen="settings"].is-active')
+  await page.click('section[data-screen="pause"] [data-action="settings"]')
+  await page.waitForSelector('section[data-screen="settings"].is-active')
   await page.waitForTimeout(400)
   await page.screenshot({ path: `${out}/04-settings.png` })
   await page.keyboard.press('Escape')
-  await page.waitForSelector('[data-screen="pause"].is-active')
+  await page.waitForSelector('section[data-screen="pause"].is-active')
   await page.waitForTimeout(300)
   if ((await state(page)).mode !== 'paused') throw new Error('leaving Settings with Escape resumed the run')
 
-  // Results: finish the run through the real rules by collecting the remaining cores.
+  // Results: finish the first campus arc through the real interaction handler.
   await page.evaluate(() => {
     const { game } = window.__game
-    const cores = game['cores']
     game.resume()
-    for (const p of cores.remaining()) {
-      game['player'].teleport(p)
-      game.step(1 / 60)
-    }
+    game['run'].missionIndex = 4
+    const target = game['world'].missionTarget(4).clone()
+    game['player'].teleport(target)
+    game['handleInteraction'](target)
   })
-  await page.waitForSelector('[data-screen="results"].is-active', { timeout: 10_000 })
+  await page.waitForSelector('section[data-screen="results"].is-active', { timeout: 10_000 })
   await page.waitForTimeout(1500)
   await page.screenshot({ path: `${out}/05-results.png` })
   const done = await state(page)
@@ -133,7 +132,7 @@ try {
   const phone = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'zh-CN' })
   const phonePage = await openGame(phone, errors)
   await phonePage.tap('[data-action="play"]')
-  await phonePage.waitForSelector('[data-screen="hud"].is-active')
+  await phonePage.waitForSelector('section[data-screen="hud"].is-active')
   await phonePage.waitForTimeout(1200)
   await phonePage.screenshot({ path: `${out}/07-phone-hud.png` })
   await phone.close()
