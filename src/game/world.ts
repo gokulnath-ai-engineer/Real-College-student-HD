@@ -62,6 +62,7 @@ export class World {
     this.addCampus()
     this.addCityEdge()
     this.addNature()
+    this.addCinematicDetails()
     this.addNpcs()
     this.addTraffic()
     this.addWeather()
@@ -168,6 +169,12 @@ export class World {
     for (let x = -size.x / 2 + 2.2; x < size.x / 2; x += 3.2) for (const y of [1.7, 3.6]) {
       const window = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.85, 0.08), mat(COLORS.glass)); window.position.set(pos.x + x, y, pos.z - size.z / 2 - 0.05); window.castShadow = true; this.scene.add(window)
     }
+    for (let floor = 1; floor < Math.floor(size.y / 1.6); floor += 1) {
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(size.x + 0.18, 0.08, size.z + 0.18), mat('#789b9a'))
+      slab.position.set(pos.x, floor * 1.55, pos.z); slab.castShadow = true; this.scene.add(slab)
+    }
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(Math.min(size.x * 0.62, 8), 0.18, 1.2), mat(accent))
+    canopy.position.set(pos.x, 2.9, pos.z - size.z / 2 - 0.7); canopy.castShadow = true; this.scene.add(canopy)
     this.physics.addStaticBox(new THREE.Vector3(pos.x, size.y / 2, pos.z), size)
     this.addSign(label, new THREE.Vector3(pos.x, size.y + 0.75, pos.z - size.z / 2 - 0.15), accent, 0.5)
   }
@@ -213,6 +220,35 @@ export class World {
     const random = seeded(88)
     for (let i = 0; i < 58; i += 1) { const x = -43 + random() * 86; const z = -34 + random() * 74; if (Math.abs(x) < 24 && Math.abs(z) < 17) continue; this.addTree(new THREE.Vector3(x, 0, z), 0.7 + random() * 0.8) }
     for (let i = 0; i < 18; i += 1) { const cloud = new THREE.Group(); for (let p = 0; p < 3; p += 1) { const puff = new THREE.Mesh(new THREE.SphereGeometry(1.6 + random() * 1.8, 12, 8), new THREE.MeshBasicMaterial({ color: '#d5e5ec', transparent: true, opacity: 0.12 })); puff.position.set(p * 2 - 2, random(), random() * 1.2); puff.scale.y = 0.45; cloud.add(puff) } cloud.position.set(-90 + random() * 180, 20 + random() * 20, -60 + random() * 120); cloud.userData.speed = 0.2 + random() * 0.4; this.clouds.push(cloud); this.scene.add(cloud) }
+  }
+
+  private addCinematicDetails(): void {
+    const plaza = new THREE.Mesh(new THREE.CircleGeometry(13, 32), mat('#28635d'))
+    plaza.rotation.x = -Math.PI / 2; plaza.position.set(0, 0.055, 18); plaza.receiveShadow = true; this.scene.add(plaza)
+    for (const x of [-8, -4, 4, 8]) {
+      this.addLamp(new THREE.Vector3(x, 0, 17))
+      const planter = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.95, 0.35, 12), mat('#667b74'))
+      planter.position.set(x, 0.2, 12.8); this.scene.add(planter)
+      const palm = new THREE.Group(); palm.position.set(x, 0.38, 12.8)
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 2.3, 8), mat(COLORS.trunk)); trunk.position.y = 1.15; palm.add(trunk)
+      for (let leaf = 0; leaf < 6; leaf += 1) { const frond = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 1.25, 4, 8), mat('#3eab75')); frond.position.y = 2.25; frond.rotation.z = (leaf / 6) * Math.PI * 2; frond.rotation.x = 0.38; palm.add(frond) }
+      palm.scale.setScalar(0.8); this.scene.add(palm)
+    }
+    for (const z of [9, 27]) {
+      const banner = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 3.6), new THREE.MeshStandardMaterial({ color: COLORS.coral, roughness: 0.7, side: THREE.DoubleSide }))
+      banner.position.set(-6, 2.1, z); banner.rotation.y = Math.PI / 2; this.scene.add(banner)
+      this.addSign(z === 9 ? 'BUILD · BELONG' : 'CMSCE 2007', new THREE.Vector3(-5.85, 2.1, z), COLORS.cream, 0.32)
+    }
+    for (let i = 0; i < 14; i += 1) {
+      const x = -58 + i * 8.6; const height = 4 + (i % 4) * 2
+      const block = new THREE.Mesh(new THREE.BoxGeometry(5.5, height, 4.5), mat(i % 2 ? '#3f6670' : '#344e62'))
+      block.position.set(x, height / 2 - 0.1, 62); block.castShadow = true; this.scene.add(block)
+      for (let row = 0; row < Math.max(1, Math.floor(height / 2)); row += 1) { const glow = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.32, 0.05), new THREE.MeshStandardMaterial({ color: COLORS.amber, emissive: COLORS.amber, emissiveIntensity: 0.45 })); glow.position.set(x - 1.4 + (row % 2) * 2.6, 1.2 + row * 1.5, 59.7); this.scene.add(glow) }
+    }
+    for (const location of this.locations) {
+      const beacon = new THREE.Mesh(new THREE.TorusGeometry(1.8, 0.035, 8, 32), new THREE.MeshBasicMaterial({ color: location.color, transparent: true, opacity: 0.62 }))
+      beacon.rotation.x = -Math.PI / 2; beacon.position.copy(location.position); beacon.position.y = 0.1; this.scene.add(beacon)
+    }
   }
 
   private addTree(pos: THREE.Vector3, scale: number): void {

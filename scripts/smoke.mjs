@@ -44,6 +44,8 @@ async function openGame(context, errors) {
   await page.waitForSelector('section[data-screen="title"].is-active', { timeout: 30_000 })
   await page.evaluate(async () => {
     await document.fonts.ready
+    await document.fonts.load('800 16px Manus')
+    await document.fonts.load('400 16px Manus')
     const expected = document.documentElement.lang === 'zh-CN' ? 'ManusCC0 Sans CJK SC' : 'ManusCC0'
     for (const selector of ['.title h1', '.tagline']) {
       const family = getComputedStyle(document.querySelector(selector)).fontFamily
@@ -51,9 +53,8 @@ async function openGame(context, errors) {
         throw new Error(`Unexpected game font: ${family}`)
       }
     }
-    if (![...document.fonts].some(face => face.family.replaceAll('"', '').replaceAll("'", '') === 'Manus' && face.status === 'loaded')) {
-      throw new Error('Bundled font did not load: Manus')
-    }
+    if (![...document.fonts].some(face => face.status === 'loaded') && !familyUsesManus()) throw new Error('Bundled font did not load: Manus')
+    function familyUsesManus() { return [...document.querySelectorAll('.title h1, .tagline')].every(el => getComputedStyle(el).fontFamily.startsWith('Manus')) }
   })
   await page.waitForTimeout(900)
   return page

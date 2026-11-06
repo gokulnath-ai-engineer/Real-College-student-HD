@@ -2,3 +2,13 @@
 
 /* Screen-specific display rules appear above; this guard wins over those rules when a screen is inactive. */
 .screen:not(.is-active){display:none!important}
+
+/* Cinematic upgrade: authored Namakkal-campus key art, richer HUD progression and depth cues. */
+.title{background-image:linear-gradient(90deg,rgba(5,15,24,.98) 0%,rgba(5,15,24,.88) 38%,rgba(5,15,24,.28) 78%,rgba(5,15,24,.72) 100%),url('/assets/share/og.png');background-size:cover;background-position:center;box-shadow:inset 0 0 160px rgba(4,12,20,.72)}
+.title:after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(72,217,193,.08),transparent 30%,rgba(255,200,87,.08));mix-blend-mode:screen}
+.title-copy,.profile-card,.title-stamp{position:relative;z-index:1}.profile-card{border-color:rgba(72,217,193,.3);box-shadow:0 24px 90px rgba(0,0,0,.46)}
+.level-rail{position:absolute;left:50%;top:24px;transform:translateX(-50%);width:min(430px,38vw);padding:11px 14px 9px;background:rgba(8,21,34,.68);border:1px solid rgba(72,217,193,.24);backdrop-filter:blur(12px);box-shadow:0 12px 35px rgba(0,0,0,.18)}
+.level-kicker{display:block;color:var(--amber);font-size:9px;letter-spacing:.16em}.level-name{display:block;color:var(--cream);font-size:12px;letter-spacing:.06em;margin-top:4px}.level-copy{display:block;color:var(--muted);font-size:10px;margin-top:3px}.level-track{height:3px;background:#203743;margin-top:9px;overflow:hidden}.level-fill{display:block;width:12%;height:100%;background:linear-gradient(90deg,var(--teal),var(--amber));transition:width .35s ease}.level-nodes{display:flex;justify-content:space-between;color:var(--muted);font-size:8px;margin-top:5px}.level-nodes b:first-child{color:var(--teal)}
+.mission-rail{background:linear-gradient(145deg,rgba(8,21,34,.94),rgba(12,35,47,.72));border-top:1px solid rgba(72,217,193,.16)}.minimap{box-shadow:0 0 0 1px rgba(255,200,87,.08),0 16px 48px rgba(0,0,0,.4)}.location-chip{box-shadow:0 8px 30px rgba(0,0,0,.3)}
+body,#ui,button,input{font-family:Manus,system-ui,sans-serif}
+@media(max-width:780px){.level-rail{left:14px;right:14px;top:76px;transform:none;width:auto}.mission-rail{top:178px}.minimap{top:178px}}
