@@ -28,4 +28,4 @@
 - [x] Include build/run documentation and public-source citations.
 - [x] Add game-specific sharing metadata, favicon and promotional cover.
 - [x] Run build, unit tests and smoke validation with no known actionable errors.
-- [ ] Save a managed checkpoint for the exact verified source tree.
+- [x] Save and push the verified source tree to canonical main; the final local and remote refs match.
